@@ -53,7 +53,7 @@ def package_version() -> str:
     try:
         return version("brr")
     except PackageNotFoundError:
-        return "0.4.0"
+        return "0.4.1"
 
 
 def _positive_float(value: str) -> float:
@@ -122,6 +122,26 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_extended_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-x",
+        "--extended",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show extended TAG and PINNED columns in text output.",
+    )
+
+
+def _add_cumulative_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "-c",
+        "--cumulative",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show cumulative runtime metrics in text output.",
+    )
+
+
 def _add_devmode_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--devmode",
@@ -185,6 +205,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pretty-print JSON output. Requires --json.",
     )
     parser.add_argument(
+        "-x",
+        "--extended",
+        action="store_true",
+        help="Show extended TAG and PINNED columns in text output.",
+    )
+    parser.add_argument(
+        "-c",
+        "--cumulative",
+        action="store_true",
+        help="Show cumulative runtime metrics where available in text output.",
+    )
+    parser.add_argument(
         "-V",
         "--version",
         action="version",
@@ -195,6 +227,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prog_parser = subparsers.add_parser("prog", help="List loaded eBPF programs.")
     _add_output_options(prog_parser)
+    _add_extended_option(prog_parser)
     prog_parser.add_argument(
         "--stats",
         action="store_true",
@@ -206,6 +239,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show eBPF program runtime deltas.",
     )
     _add_output_options(activity_parser)
+    _add_cumulative_option(activity_parser)
+    _add_extended_option(activity_parser)
     activity_parser.add_argument(
         "-d",
         "--duration",
@@ -233,8 +268,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     map_parser = subparsers.add_parser("map", help="List loaded eBPF maps.")
     _add_output_options(map_parser)
+    _add_extended_option(map_parser)
     link_parser = subparsers.add_parser("link", help="List loaded eBPF links.")
     _add_output_options(link_parser)
+    _add_extended_option(link_parser)
     btf_parser = subparsers.add_parser("btf", help="List loaded BTF objects.")
     _add_output_options(btf_parser)
 
@@ -272,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Profile BPF JIT execution with native perf_event_open sampling.",
     )
     _add_output_options(profile_parser)
+    _add_extended_option(profile_parser)
     _add_devmode_options(profile_parser)
     profile_parser.add_argument(
         "-d",
@@ -361,7 +399,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.csv:
                 print(render_programs_csv(programs))
             else:
-                print(render_programs(programs, with_stats=with_stats))
+                print(
+                    render_programs(
+                        programs,
+                        with_stats=with_stats,
+                        extended=args.extended,
+                    )
+                )
         elif object_type == "activity":
             activities = service.collect_program_activity(
                 duration=args.duration,
@@ -388,7 +432,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     )
                 )
             else:
-                print(render_program_activity(activities))
+                print(
+                    render_program_activity(
+                        activities,
+                        duration=args.duration,
+                        cumulative=args.cumulative,
+                        extended=args.extended,
+                    )
+                )
         elif object_type == "top":
             config = config_from_args(args, bpffs=args.bpffs)
             if args.textmode:
@@ -409,7 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.csv:
                 print(render_maps_csv(maps))
             else:
-                print(render_maps(maps))
+                print(render_maps(maps, extended=args.extended))
         elif object_type == "link":
             links = service.collect_links()
             if args.json:
@@ -417,7 +468,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             elif args.csv:
                 print(render_links_csv(links))
             else:
-                print(render_links(links))
+                print(render_links(links, extended=args.extended))
         elif object_type == "btf":
             btfs = service.collect_btfs()
             if args.json:
@@ -515,6 +566,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     render_profile(
                         profile,
                         wide=args.wide,
+                        extended=args.extended,
                         source_context_by_program=source_context_by_program,
                     )
                 )

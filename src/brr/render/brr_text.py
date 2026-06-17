@@ -8,24 +8,32 @@ from brr.render.text import _render_table
 from brr.reporter import BrrActivityItem, BrrActivityReport, BrrDetailReport, BrrSourceLine
 
 
-def render_brr_activity(report: BrrActivityReport) -> str:
+def render_brr_activity(
+    report: BrrActivityReport,
+    *,
+    cumulative: bool = False,
+    extended: bool = False,
+) -> str:
     header = f"BRR ACTIVITY duration={report.duration:g}"
     if not report.items:
         return f"{header}\nNo active eBPF program runtime deltas observed."
-    rows = [_activity_row(item) for item in report.items]
+    rows = [
+        _activity_row(item, duration=report.duration, cumulative=cumulative, extended=extended)
+        for item in report.items
+    ]
     return "\n".join([header, _render_top_activity_table(rows)])
 
 
-def render_brr_detail(report: BrrDetailReport) -> str:
+def render_brr_detail(report: BrrDetailReport, *, extended: bool = False) -> str:
     return "\n\n".join(
         [
-            _render_profile_section(report),
+            _render_profile_section(report, extended=extended),
             _render_source_section(report),
         ]
     )
 
 
-def render_brr_inspect(report: BrrInspectReport) -> str:
+def render_brr_inspect(report: BrrInspectReport, *, extended: bool = False) -> str:
     profiled = "yes" if report.profiled else "no"
     header = (
         f"BRR INSPECT program={report.program.id} name={report.program.name} "
@@ -55,7 +63,7 @@ def render_brr_inspect(report: BrrInspectReport) -> str:
     return "\n".join(sections)
 
 
-def _render_profile_section(report: BrrDetailReport) -> str:
+def _render_profile_section(report: BrrDetailReport, *, extended: bool = False) -> str:
     metadata = report.profile.metadata
     header = (
         f"BRR PROFILE program={report.program.id} name={report.program.name} "
@@ -74,7 +82,7 @@ def _render_profile_section(report: BrrDetailReport) -> str:
     sections = [
         header,
         *_profile_warning_lines(metadata),
-        _render_table([_profile_program_row(report.profile_program)]),
+        _render_table([_profile_program_row(report.profile_program, extended=extended)]),
     ]
     if report.profile_program.hotspots:
         sections.append(
@@ -97,33 +105,54 @@ def _render_source_section(report: BrrDetailReport) -> str:
     return "\n".join([header, _render_table([_source_row(row) for row in report.source_lines])])
 
 
-def _activity_row(item: BrrActivityItem) -> dict[str, str]:
+def _activity_row(
+    item: BrrActivityItem,
+    *,
+    duration: float,
+    cumulative: bool = False,
+    extended: bool = False,
+) -> dict[str, str]:
     activity = item.activity
-    return {
+    row = {
         "ID": str(activity.id),
         "TYPE": activity.program_type,
         "NAME": activity.name,
-        "BPF%": f"{item.bpf_percent:.4f}",
-        "TOTAL_NS": _format_int(activity.run_time_ns_delta),
-        "RUN_COUNT": _format_int(activity.run_count_delta),
+        "CPU%": f"{item.bpf_percent:.4f}",
+        "EXECS/s": _format_rate(activity.run_count_delta, duration=duration),
         "AVG_NS": _format_int(activity.avg_run_time_ns),
-        "XLAT_B": _format_int(activity.xlated_size_bytes),
-        "JIT_B": _format_int(activity.jited_size_bytes),
-        "TAG": activity.tag or "-",
-        "PINNED": ",".join(activity.pinned_paths) if activity.pinned_paths else "-",
     }
+    if cumulative:
+        row["CUMUL_AVG_NS"] = _format_int(activity.cumulative_avg_run_time_ns)
+    row["NS_PER/s"] = _format_rate(activity.run_time_ns_delta, duration=duration)
+    if cumulative:
+        row["EXECS_DELTA"] = _format_int(activity.run_count_delta)
+        row["TOTAL_NS"] = _format_int(activity.run_time_ns_delta)
+        row["EXECS_TOTAL"] = _format_int(activity.run_count_total)
+        row["CUMUL_NS"] = _format_int(activity.run_time_ns_total)
+    row["XLAT_B"] = _format_int(activity.xlated_size_bytes)
+    row["JIT_B"] = _format_int(activity.jited_size_bytes)
+    if extended:
+        row["TAG"] = activity.tag or "-"
+        row["PINNED"] = ",".join(activity.pinned_paths) if activity.pinned_paths else "-"
+    return row
 
 
-def _profile_program_row(program: BpfProfileProgram) -> dict[str, str]:
-    return {
+def _profile_program_row(
+    program: BpfProfileProgram,
+    *,
+    extended: bool = False,
+) -> dict[str, str]:
+    row = {
         "ID": str(program.id),
         "TYPE": program.program_type,
         "NAME": program.name,
         "SAMPLES": str(program.samples),
         "CPU%": f"{program.cpu_percent:.4f}",
-        "TAG": program.tag or "-",
-        "PINNED": ",".join(program.pinned_paths) if program.pinned_paths else "-",
     }
+    if extended:
+        row["TAG"] = program.tag or "-"
+        row["PINNED"] = ",".join(program.pinned_paths) if program.pinned_paths else "-"
+    return row
 
 
 def _hotspot_row(hotspot: BpfHotspot) -> dict[str, str]:
@@ -216,10 +245,15 @@ def _profile_sample_summary(metadata: BpfProfileMetadata) -> str:
 
 _TOP_NUMERIC_COLUMNS = {
     "ID",
-    "BPF%",
-    "TOTAL_NS",
-    "RUN_COUNT",
+    "CPU%",
+    "EXECS/s",
+    "NS_PER/s",
     "AVG_NS",
+    "CUMUL_AVG_NS",
+    "EXECS_DELTA",
+    "TOTAL_NS",
+    "EXECS_TOTAL",
+    "CUMUL_NS",
     "XLAT_B",
     "JIT_B",
 }
@@ -252,3 +286,9 @@ def _format_cell(value: str, width: int, *, right: bool) -> str:
 
 def _format_int(value: int) -> str:
     return f"{value:,}"
+
+
+def _format_rate(value: int, *, duration: float) -> str:
+    if duration <= 0:
+        return "0"
+    return _format_int(round(value / duration))

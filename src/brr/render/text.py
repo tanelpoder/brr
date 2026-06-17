@@ -19,7 +19,12 @@ from brr.profiler import PerfEventAvailability
 from brr.source_context import SourceContextReport
 
 
-def render_programs(programs: list[BpfProgram], *, with_stats: bool = False) -> str:
+def render_programs(
+    programs: list[BpfProgram],
+    *,
+    with_stats: bool = False,
+    extended: bool = False,
+) -> str:
     if not programs:
         return "No eBPF programs found."
 
@@ -31,37 +36,52 @@ def render_programs(programs: list[BpfProgram], *, with_stats: bool = False) -> 
             "NAME": program.name,
             "XLATED_BYTES": str(program.xlated_size_bytes),
             "JITED_BYTES": str(program.jited_size_bytes),
-            "TAG": program.tag or "-",
-            "PINNED": ",".join(program.pinned_paths) if program.pinned_paths else "-",
         }
         if with_stats:
             row["RUN_CNT"] = str(program.run_count or 0)
             row["RUN_TIME_NS"] = str(program.run_time_ns or 0)
+        if extended:
+            row["TAG"] = program.tag or "-"
+            row["PINNED"] = ",".join(program.pinned_paths) if program.pinned_paths else "-"
         rows.append(row)
     return _render_table(rows)
 
 
-def render_program_activity(activities: list[BpfProgramActivity]) -> str:
+def render_program_activity(
+    activities: list[BpfProgramActivity],
+    *,
+    duration: float = 1.0,
+    cumulative: bool = False,
+    extended: bool = False,
+) -> str:
     if not activities:
         return "No active eBPF program runtime deltas observed."
 
-    return _render_table(
-        [
-            {
-                "ID": str(activity.id),
-                "TYPE": activity.program_type,
-                "NAME": activity.name,
-                "XLATED_BYTES": str(activity.xlated_size_bytes),
-                "JITED_BYTES": str(activity.jited_size_bytes),
-                "RUN_CNT_DELTA": str(activity.run_count_delta),
-                "RUN_TIME_NS_DELTA": str(activity.run_time_ns_delta),
-                "AVG_RUN_TIME_NS": str(activity.avg_run_time_ns),
-                "TAG": activity.tag or "-",
-                "PINNED": ",".join(activity.pinned_paths) if activity.pinned_paths else "-",
-            }
-            for activity in activities
-        ]
-    )
+    rows = []
+    for activity in activities:
+        row = {
+            "ID": str(activity.id),
+            "TYPE": activity.program_type,
+            "NAME": activity.name,
+            "CPU%": f"{_bpf_percent(activity.run_time_ns_delta, duration=duration):.4f}",
+            "EXECS/s": str(_rate_per_second(activity.run_count_delta, duration=duration)),
+            "AVG_NS": str(activity.avg_run_time_ns),
+        }
+        if cumulative:
+            row["CUMUL_AVG_NS"] = str(activity.cumulative_avg_run_time_ns)
+        row["NS_PER/s"] = str(_rate_per_second(activity.run_time_ns_delta, duration=duration))
+        if cumulative:
+            row["EXECS_DELTA"] = str(activity.run_count_delta)
+            row["TOTAL_NS"] = str(activity.run_time_ns_delta)
+            row["EXECS_TOTAL"] = str(activity.run_count_total)
+            row["CUMUL_NS"] = str(activity.run_time_ns_total)
+        row["XLAT_B"] = str(activity.xlated_size_bytes)
+        row["JIT_B"] = str(activity.jited_size_bytes)
+        if extended:
+            row["TAG"] = activity.tag or "-"
+            row["PINNED"] = ",".join(activity.pinned_paths) if activity.pinned_paths else "-"
+        rows.append(row)
+    return _render_table(rows)
 
 
 def render_program_dump(
@@ -139,6 +159,7 @@ def render_profile(
     profile: BpfProfile,
     *,
     wide: bool = False,
+    extended: bool = False,
     source_context_by_program: dict[int, SourceContextReport] | None = None,
 ) -> str:
     if not profile.items:
@@ -146,7 +167,12 @@ def render_profile(
 
     show_kernel_summary = any(program.kernel_samples for program in profile.items)
     program_rows = [
-        _profile_program_row(program, wide=wide, show_kernel=show_kernel_summary)
+        _profile_program_row(
+            program,
+            wide=wide,
+            extended=extended,
+            show_kernel=show_kernel_summary,
+        )
         for program in profile.items
     ]
     rendered = [*_profile_warning_lines(profile), _render_table(program_rows)]
@@ -223,6 +249,7 @@ def _profile_program_row(
     program: BpfProfileProgram,
     *,
     wide: bool,
+    extended: bool,
     show_kernel: bool = False,
 ) -> dict[str, str]:
     row = {
@@ -239,8 +266,9 @@ def _profile_program_row(
     if show_kernel:
         row["KERNEL_CPU%"] = f"{program.kernel_cpu_percent:.4f}"
         row["INCL_CPU%"] = f"{program.inclusive_cpu_percent:.4f}"
-    row["TAG"] = program.tag or "-"
-    row["PINNED"] = ",".join(program.pinned_paths) if program.pinned_paths else "-"
+    if extended:
+        row["TAG"] = program.tag or "-"
+        row["PINNED"] = ",".join(program.pinned_paths) if program.pinned_paths else "-"
     return row
 
 
@@ -302,43 +330,43 @@ def _source_context_warning_lines(report: SourceContextReport) -> list[str]:
     return lines
 
 
-def render_maps(maps: list[BpfMap]) -> str:
+def render_maps(maps: list[BpfMap], *, extended: bool = False) -> str:
     if not maps:
         return "No eBPF maps found."
-    return _render_table(
-        [
-            {
-                "ID": str(map_.id),
-                "TYPE": map_.map_type,
-                "NAME": map_.name,
-                "KEY": str(map_.key_size),
-                "VALUE": str(map_.value_size),
-                "MAX_ENTRIES": str(map_.max_entries),
-                "BTF_ID": str(map_.btf_id or "-"),
-                "PINNED": ",".join(map_.pinned_paths) if map_.pinned_paths else "-",
-            }
-            for map_ in maps
-        ]
-    )
+    rows = []
+    for map_ in maps:
+        row = {
+            "ID": str(map_.id),
+            "TYPE": map_.map_type,
+            "NAME": map_.name,
+            "KEY": str(map_.key_size),
+            "VALUE": str(map_.value_size),
+            "MAX_ENTRIES": str(map_.max_entries),
+            "BTF_ID": str(map_.btf_id or "-"),
+        }
+        if extended:
+            row["PINNED"] = ",".join(map_.pinned_paths) if map_.pinned_paths else "-"
+        rows.append(row)
+    return _render_table(rows)
 
 
-def render_links(links: list[BpfLink]) -> str:
+def render_links(links: list[BpfLink], *, extended: bool = False) -> str:
     if not links:
         return "No eBPF links found."
-    return _render_table(
-        [
-            {
-                "ID": str(link.id),
-                "TYPE": link.link_type,
-                "PROG_ID": str(link.prog_id),
-                "ATTACH_TYPE": link.attach_type or "-",
-                "TARGET_OBJ_ID": str(link.target_obj_id or "-"),
-                "TARGET_BTF_ID": str(link.target_btf_id or "-"),
-                "PINNED": ",".join(link.pinned_paths) if link.pinned_paths else "-",
-            }
-            for link in links
-        ]
-    )
+    rows = []
+    for link in links:
+        row = {
+            "ID": str(link.id),
+            "TYPE": link.link_type,
+            "PROG_ID": str(link.prog_id),
+            "ATTACH_TYPE": link.attach_type or "-",
+            "TARGET_OBJ_ID": str(link.target_obj_id or "-"),
+            "TARGET_BTF_ID": str(link.target_btf_id or "-"),
+        }
+        if extended:
+            row["PINNED"] = ",".join(link.pinned_paths) if link.pinned_paths else "-"
+        rows.append(row)
+    return _render_table(rows)
 
 
 def render_btfs(btfs: list[BtfObject]) -> str:
@@ -384,6 +412,18 @@ def _optional_value(value: str | int | None) -> str:
     return str(value) if value is not None else "-"
 
 
+def _rate_per_second(value: int, *, duration: float) -> int:
+    if duration <= 0:
+        return 0
+    return round(value / duration)
+
+
+def _bpf_percent(run_time_ns_delta: int, *, duration: float) -> float:
+    if duration <= 0:
+        return 0.0
+    return round((run_time_ns_delta / (duration * 1_000_000_000)) * 100, 4)
+
+
 def _profile_file_name(file_name: str | None, *, wide: bool) -> str:
     if not file_name:
         return "-"
@@ -406,13 +446,25 @@ def _is_numeric_column(column: str) -> bool:
         "RUN_TIME_NS",
         "XLATED_BYTES",
         "JITED_BYTES",
+        "XLAT_B",
+        "JIT_B",
         "RUN_CNT_DELTA",
         "RUN_TIME_NS_DELTA",
         "AVG_RUN_TIME_NS",
+        "RUN_CNT_TOTAL",
+        "RUN_TIME_NS_TOTAL",
+        "CUMUL_AVG_RUN_TIME_NS",
+        "EXECS/s",
+        "NS_PER/s",
+        "AVG_NS",
+        "CUMUL_AVG_NS",
+        "EXECS_DELTA",
+        "TOTAL_NS",
+        "EXECS_TOTAL",
+        "CUMUL_NS",
         "SIZE",
         "SAMPLES",
         "KERNEL_SAMPLES",
-        "BPF%",
         "CPU%",
         "KERNEL_CPU%",
         "LINE",

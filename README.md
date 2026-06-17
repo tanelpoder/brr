@@ -15,19 +15,23 @@ does not shell out to `perf`.
 Default program listing:
 
 ```text
-ID  TYPE       NAME              XLATED_BYTES  JITED_BYTES  TAG               PINNED
-42  tracing    trace_execve      744           512          8b77a49c4e7c1f93  -
-48  xdp        xdp_pass          96            64           4f9d0b5f95f43b2a  /sys/fs/bpf/xdp_pass
-53  cgroup_skb allow_egress      312           224          26c20f36d4ec9e4a  -
+ID  TYPE       NAME          XLATED_BYTES  JITED_BYTES
+42  tracing    trace_execve  744           512
+48  xdp        xdp_pass      96            64
+53  cgroup_skb allow_egress  312           224
 ```
 
 Runtime activity:
 
 ```text
-ID  TYPE     NAME          XLATED_BYTES  JITED_BYTES  RUN_CNT_DELTA  RUN_TIME_NS_DELTA  AVG_RUN_TIME_NS  TAG               PINNED
-48  xdp      xdp_pass      96            64           1842           714110             387              4f9d0b5f95f43b2a  /sys/fs/bpf/xdp_pass
-42  tracing  trace_execve  744           512          18             28422              1579             8b77a49c4e7c1f93  -
+ID  TYPE     NAME          XLATED_BYTES  JITED_BYTES  RUN_CNT_DELTA  RUN_TIME_NS_DELTA  AVG_RUN_TIME_NS
+48  xdp      xdp_pass      96            64           1842           714110             387
+42  tracing  trace_execve  744           512          18             28422              1579
 ```
+
+Use `-x` or `--extended` to include extra columns such as `TAG` and `PINNED`.
+Use `-c` or `--cumulative` with `activity` and `top` to include cumulative
+runtime metrics.
 
 JSON and CSV output are available for scripting:
 
@@ -61,13 +65,13 @@ sudo env PATH="$PATH" brr
 Download the DEB for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo dpkg -i brr_0.4.0-1_amd64.deb
+sudo dpkg -i brr_0.4.1-1_amd64.deb
 ```
 
 On ARM64:
 
 ```bash
-sudo dpkg -i brr_0.4.0-1_arm64.deb
+sudo dpkg -i brr_0.4.1-1_arm64.deb
 ```
 
 ### Fedora, RHEL, or compatible RPM systems
@@ -75,13 +79,13 @@ sudo dpkg -i brr_0.4.0-1_arm64.deb
 Download the RPM for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo rpm -Uvh brr-0.4.0-1.x86_64.rpm
+sudo rpm -Uvh brr-0.4.1-1.x86_64.rpm
 ```
 
 On AArch64:
 
 ```bash
-sudo rpm -Uvh brr-0.4.0-1.aarch64.rpm
+sudo rpm -Uvh brr-0.4.1-1.aarch64.rpm
 ```
 
 The packaged command installs as `/usr/bin/brr` and contains a standalone
@@ -97,6 +101,7 @@ List loaded eBPF programs:
 ```bash
 sudo brr
 sudo brr prog
+sudo brr -x
 ```
 
 List other object types:
@@ -117,13 +122,20 @@ Show runtime deltas:
 
 ```bash
 sudo brr activity --duration 2 --limit 10
+sudo brr activity -x --duration 2
+sudo brr activity -c --duration 2
 ```
 
 Open the interactive top-style TUI:
 
 ```bash
 sudo brr top
+sudo brr top -x
+sudo brr top -c
 ```
+
+Inside `brr top`, press `x` to toggle extended columns and `c` to toggle
+cumulative columns.
 
 Inspect a program by ID:
 
@@ -163,9 +175,9 @@ uv run --group package python scripts/build_release.py --all
 
 Artifacts are written to `dist/release/`:
 
-- `brr-0.4.0-linux-<arch>`
-- `brr_0.4.0-1_<deb-arch>.deb`
-- `brr-0.4.0-1.<rpm-arch>.rpm`
+- `brr-0.4.1-linux-<arch>`
+- `brr_0.4.1-1_<deb-arch>.deb`
+- `brr-0.4.1-1.<rpm-arch>.rpm`
 - `SHA256SUMS`
 
 ## Notes

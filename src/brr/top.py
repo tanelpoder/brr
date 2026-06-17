@@ -37,19 +37,28 @@ TOP_ACTIVITY_COLUMNS = (
     ("ID", True),
     ("TYPE", False),
     ("NAME", False),
-    ("BPF%", True),
-    ("TOTAL_NS", True),
-    ("RUN_COUNT", True),
+    ("CPU%", True),
+    ("EXECS/s", True),
     ("AVG_NS", True),
-    ("CUMUL_NS", True),
-    ("CUMUL_RUNS", True),
     ("CUMUL_AVG_NS", True),
+    ("NS_PER/s", True),
+    ("EXECS_DELTA", True),
+    ("TOTAL_NS", True),
+    ("EXECS_TOTAL", True),
+    ("CUMUL_NS", True),
     ("XLAT_B", True),
     ("JIT_B", True),
     ("TAG", False),
     ("PINNED", False),
 )
-CUMULATIVE_TOP_COLUMNS = {"CUMUL_NS", "CUMUL_RUNS", "CUMUL_AVG_NS"}
+CUMULATIVE_TOP_COLUMNS = {
+    "CUMUL_AVG_NS",
+    "EXECS_DELTA",
+    "TOTAL_NS",
+    "EXECS_TOTAL",
+    "CUMUL_NS",
+}
+EXTENDED_TOP_COLUMNS = {"TAG", "PINNED"}
 TEXTUAL_DARK_THEME = "textual-dark"
 TEXTUAL_LIGHT_THEME = "textual-light"
 KNOWN_256_COLOR_TERMS = {"ghostty", "xterm-ghostty"}
@@ -72,16 +81,12 @@ def _selected_activity_id(activity_ids: list[int], cursor_row: int) -> int | Non
 
 
 def _preserved_activity_row(
-    activity_ids: list[int],
-    *,
-    selected_program_id: int | None,
+    row_count: int,
     previous_row: int,
 ) -> int | None:
-    if not activity_ids:
+    if row_count <= 0:
         return None
-    if selected_program_id in activity_ids:
-        return activity_ids.index(selected_program_id)
-    return min(max(previous_row, 0), len(activity_ids) - 1)
+    return min(max(previous_row, 0), row_count - 1)
 
 
 def _hottest_inspect_row(report: BrrInspectReport) -> int | None:
@@ -278,12 +283,22 @@ def _format_int(value: int) -> str:
     return f"{value:,}"
 
 
-def _visible_top_activity_columns(show_cumulative: bool) -> tuple[tuple[str, bool], ...]:
-    if show_cumulative:
-        return TOP_ACTIVITY_COLUMNS
-    return tuple(
-        column for column in TOP_ACTIVITY_COLUMNS if column[0] not in CUMULATIVE_TOP_COLUMNS
-    )
+def _format_rate(value: int, *, duration: float) -> str:
+    if duration <= 0:
+        return "0"
+    return _format_int(round(value / duration))
+
+
+def _visible_top_activity_columns(
+    show_cumulative: bool,
+    show_extended: bool,
+) -> tuple[tuple[str, bool], ...]:
+    hidden_columns = set()
+    if not show_cumulative:
+        hidden_columns.update(CUMULATIVE_TOP_COLUMNS)
+    if not show_extended:
+        hidden_columns.update(EXTENDED_TOP_COLUMNS)
+    return tuple(column for column in TOP_ACTIVITY_COLUMNS if column[0] not in hidden_columns)
 
 
 def _search_match_rows(rows: list[BrrInspectRow], query: str) -> list[int]:
@@ -352,6 +367,8 @@ class BrrConfig:
     devmode_default_dir: bool = False
     kernel_samples: bool = False
     call_graph: CallGraphMode = "fp"
+    extended: bool = False
+    cumulative: bool = False
 
 
 def _terminfo_colors(environ: MutableMapping[str, str]) -> int | None:
@@ -406,7 +423,10 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
         type=_non_negative_int,
         default=20,
         metavar="N",
-        help="Maximum rows to show. Use 0 for no limit. Default: 20.",
+        help=(
+            "Maximum rows to show in --textmode snapshots. "
+            "Interactive top shows all programs. Use 0 for no limit. Default: 20."
+        ),
     )
     parser.add_argument(
         "--all",
@@ -461,6 +481,20 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
         "--profile-top",
         action="store_true",
         help="In textmode, append a profile/source drill-down for the top activity row.",
+    )
+    parser.add_argument(
+        "-x",
+        "--extended",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show extended TAG and PINNED columns.",
+    )
+    parser.add_argument(
+        "-c",
+        "--cumulative",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Show cumulative runtime metric columns.",
     )
     parser.add_argument(
         "--kernel-samples",
@@ -524,6 +558,8 @@ def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
         devmode_default_dir=getattr(args, "devmode", None) is True,
         kernel_samples=args.kernel_samples,
         call_graph=args.call_graph,
+        extended=getattr(args, "extended", False),
+        cumulative=getattr(args, "cumulative", False),
     )
 
 
@@ -549,7 +585,13 @@ def render_textmode(
         include_all=True,
         limit=config.limit,
     )
-    sections = [render_brr_activity(activity)]
+    sections = [
+        render_brr_activity(
+            activity,
+            cumulative=config.cumulative,
+            extended=config.extended,
+        )
+    ]
     source_context_enricher = (
         SourceContextEnricher(config.devdir) if config.devmode and config.devdir else None
     )
@@ -582,7 +624,7 @@ def render_textmode(
                 profile_program=inspect.profile_program,
                 instruction_source=inspect.instruction_source,
             )
-        sections.append(render_brr_inspect(inspect))
+        sections.append(render_brr_inspect(inspect, extended=config.extended))
     elif profile_top:
         sections.append("BRR PROFILE program=-\nNo program selected for profiling.")
 
@@ -619,6 +661,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
 
     from textual.app import App, ComposeResult
     from textual.containers import Vertical
+    from textual.css.query import NoMatches
     from textual.widgets import Checkbox, DataTable, Footer, Header, HelpPanel, Input, Static
     from textual.worker import Worker, WorkerState
 
@@ -634,8 +677,6 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
     class ActivityRefreshResult:
         token: int
         report: BrrActivityReport
-        selected_program_id: int | None
-        previous_row: int
 
     @dataclass(frozen=True, slots=True)
     class InspectLoadResult:
@@ -743,6 +784,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             ("question_mark", "inspect", "Inspect"),
             ("escape", "close_inspect", "Close"),
             ("space", "toggle_pause_or_inspect_mode", "Pause/mode"),
+            ("x", "toggle_extended", "Extended"),
             ("p", "profile_default", "Profile"),
             ("P", "profile_custom", "Profile options"),
             ("i", "toggle_inspect_markers", "Markers"),
@@ -770,7 +812,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.last_activity_report: BrrActivityReport | None = None
             self.refresh_timer = None
             self.refresh_paused = False
-            self.show_cumulative = False
+            self.show_cumulative = config.cumulative
+            self.show_extended = config.extended
             self.delay_options_open = False
             self.inspect_open = False
             self.profile_options_open = False
@@ -845,6 +888,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 "refresh",
                 "inspect",
                 "change_delay",
+                "toggle_extended",
             }:
                 return not self.inspect_open
             if action == "toggle_pause_or_inspect_mode":
@@ -906,17 +950,17 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
 
         def action_refresh(self) -> None:
             if self.inspect_open:
-                self.query_one("#status", Static).update(
-                    "Top refresh paused while inspecting; Esc returns to live view."
-                )
+                try:
+                    self.query_one("#status", Static).update(
+                        "Top refresh paused while inspecting; Esc returns to live view."
+                    )
+                except NoMatches:
+                    pass
                 return
             if self.activity_refreshing:
                 return
-            table = self.query_one("#activity", DataTable)
             token = self._next_worker_token()
             self.activity_token = token
-            selected_program_id = _selected_activity_id(self.activity_ids, table.cursor_row)
-            previous_row = table.cursor_row
             self.activity_refreshing = True
             self.query_one("#status", Static).update("Refreshing eBPF runtime deltas...")
 
@@ -926,13 +970,11 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                         self.service,
                         duration=self.delay,
                         include_all=True,
-                        limit=self.config.limit,
+                        limit=0,
                     )
                 return ActivityRefreshResult(
                     token=token,
                     report=report,
-                    selected_program_id=selected_program_id,
-                    previous_row=previous_row,
                 )
 
             worker = self.run_worker(
@@ -1067,6 +1109,14 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 self.refresh_bindings()
                 return
             self._toggle_inspect_mode()
+
+        def action_toggle_extended(self) -> None:
+            self.show_extended = not self.show_extended
+            self._render_last_activity()
+            self.query_one("#status", Static).update(
+                "Extended columns shown." if self.show_extended else "Extended columns hidden."
+            )
+            self.refresh_bindings()
 
         def _toggle_inspect_mode(self) -> None:
             if (
@@ -1253,9 +1303,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.last_activity_report = result.report
             table = self.query_one("#activity", DataTable)
             selected_row = _preserved_activity_row(
-                [item.activity.id for item in result.report.items],
-                selected_program_id=result.selected_program_id,
-                previous_row=result.previous_row,
+                len(result.report.items),
+                previous_row=table.cursor_row,
             )
             self._render_activity_rows(result.report)
             if selected_row is not None:
@@ -1274,10 +1323,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
             table = self.query_one("#activity", DataTable)
             previous_row = table.cursor_row
-            selected_program_id = _selected_activity_id(self.activity_ids, table.cursor_row)
             selected_row = _preserved_activity_row(
-                [item.activity.id for item in self.last_activity_report.items],
-                selected_program_id=selected_program_id,
+                len(self.last_activity_report.items),
                 previous_row=previous_row,
             )
             self._reset_activity_columns()
@@ -1288,7 +1335,10 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         def _reset_activity_columns(self) -> None:
             table = self.query_one("#activity", DataTable)
             table.clear(columns=True)
-            for label, right in _visible_top_activity_columns(self.show_cumulative):
+            for label, right in _visible_top_activity_columns(
+                self.show_cumulative,
+                self.show_extended,
+            ):
                 table.add_column(_top_cell(label, right=right))
 
         def _render_activity_rows(self, report: BrrActivityReport) -> None:
@@ -1299,32 +1349,45 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 activity = item.activity
                 self.activity_ids.append(activity.id)
                 table.add_row(
-                    *self._activity_cells(item),
+                    *self._activity_cells(item, duration=report.duration),
                     key=str(activity.id),
                 )
 
-        def _activity_cells(self, item: BrrActivityItem) -> tuple[Text | str, ...]:
+        def _activity_cells(
+            self,
+            item: BrrActivityItem,
+            *,
+            duration: float,
+        ) -> tuple[Text | str, ...]:
             activity = item.activity
             values = {
                 "ID": _top_cell(str(activity.id), right=True),
                 "TYPE": _top_cell(activity.program_type),
                 "NAME": _top_cell(activity.name),
-                "BPF%": _top_cell(f"{item.bpf_percent:.4f}", right=True),
-                "TOTAL_NS": _top_cell(_format_int(activity.run_time_ns_delta), right=True),
-                "RUN_COUNT": _top_cell(_format_int(activity.run_count_delta), right=True),
+                "CPU%": _top_cell(f"{item.bpf_percent:.4f}", right=True),
+                "EXECS/s": _top_cell(
+                    _format_rate(activity.run_count_delta, duration=duration),
+                    right=True,
+                ),
                 "AVG_NS": _top_cell(_format_int(activity.avg_run_time_ns), right=True),
-                "CUMUL_NS": _top_cell(_format_int(activity.run_time_ns_total), right=True),
-                "CUMUL_RUNS": _top_cell(_format_int(activity.run_count_total), right=True),
                 "CUMUL_AVG_NS": _top_cell(
                     _format_int(activity.cumulative_avg_run_time_ns),
                     right=True,
                 ),
+                "NS_PER/s": _top_cell(
+                    _format_rate(activity.run_time_ns_delta, duration=duration),
+                    right=True,
+                ),
+                "EXECS_DELTA": _top_cell(_format_int(activity.run_count_delta), right=True),
+                "TOTAL_NS": _top_cell(_format_int(activity.run_time_ns_delta), right=True),
+                "EXECS_TOTAL": _top_cell(_format_int(activity.run_count_total), right=True),
+                "CUMUL_NS": _top_cell(_format_int(activity.run_time_ns_total), right=True),
                 "XLAT_B": _top_cell(_format_int(activity.xlated_size_bytes), right=True),
                 "JIT_B": _top_cell(_format_int(activity.jited_size_bytes), right=True),
                 "TAG": activity.tag or "-",
                 "PINNED": ",".join(activity.pinned_paths) if activity.pinned_paths else "-",
             }
-            columns = _visible_top_activity_columns(self.show_cumulative)
+            columns = _visible_top_activity_columns(self.show_cumulative, self.show_extended)
             return tuple(values[label] for label, _right in columns)
 
         def _submit_profile_options(self) -> None:
@@ -1835,6 +1898,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             worker_key = id(event.worker)
             worker_info = self.worker_tokens.pop(worker_key, None)
             if worker_info is None:
+                if event.state == WorkerState.SUCCESS:
+                    self._handle_untracked_worker_success(event.worker.result)
                 return
             role, token = worker_info
             if event.state == WorkerState.ERROR:
@@ -1844,6 +1909,16 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 self._handle_worker_cancelled(role, token)
                 return
             self._handle_worker_success(role, token, event.worker.result)
+
+        def _handle_untracked_worker_success(self, result: object) -> None:
+            if isinstance(result, ActivityRefreshResult):
+                self._handle_worker_success("activity", result.token, result)
+            elif isinstance(result, InspectLoadResult):
+                self._handle_worker_success("inspect-load", result.token, result)
+            elif isinstance(result, InspectRenderResult):
+                self._handle_worker_success("inspect-render", result.token, result)
+            elif isinstance(result, ProfileResult):
+                self._handle_worker_success("profile", result.token, result)
 
         def _handle_worker_success(self, role: str, token: int, result: object) -> None:
             if role == "activity":
