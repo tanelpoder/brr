@@ -1,4 +1,4 @@
-# brr
+# brr: eBPF Runtime Reporter and Profiler
 
 `brr` is the eBPF Runtime Reporter: a compact CLI and Textual TUI for listing,
 inspecting, and profiling loaded Linux eBPF objects.
@@ -15,19 +15,17 @@ does not shell out to `perf`.
 
 ![](docs/images/ebpf-task-local-storage.png)
 
+![](docs/images/ebpf-lock-add-tsc-collapsed.png)
+
+![](docs/images/ebpf-lock-add-tsc-expanded.png)
+
 ![](docs/images/ebpf-hashtable-collapsed.png)
 
 ![](docs/images/ebpf-hashtable-expanded.png)
 
 ![](docs/images/ebpf-hashtable-lock-bucket.png)
 
-![](docs/images/ebpf-lock-add-tsc-collapsed.png)
-
-![](docs/images/ebpf-lock-add-tsc-expanded.png)
-
 ![](docs/images/ebpf-copy-from-user-task.png)
-
-![](docs/images/ebpf-get-tsc.png)
 
 ![](docs/images/ebpf-spinlock.png)
 
