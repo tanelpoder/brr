@@ -11,30 +11,28 @@ deltas, translated instructions, source metadata, and BPF JIT CPU samples.
 does not shell out to `perf`.
 
 
+![](docs/images/brr-top-entrypoint-trimmed.png)
 
-![](docs/images/ebpf-kernel-copy-user.webp)
+![](docs/images/ebpf-task-local-storage.png)
 
-![](docs/images/brr-top-entrypoint-trimmed.webp)
+![](docs/images/ebpf-hashtable-collapsed.png)
 
-![](docs/images/ebpf-lock-add-tsc-expanded.webp)
+![](docs/images/ebpf-hashtable-expanded.png)
 
-![](docs/images/ebpf-copy-from-user-task.webp)
+![](docs/images/ebpf-hashtable-lock-bucket.png)
 
-![](docs/images/ebpf-get-tsc.webp)
+![](docs/images/ebpf-lock-add-tsc-collapsed.png)
 
-![](docs/images/brr-top-entrypoint.webp)
+![](docs/images/ebpf-lock-add-tsc-expanded.png)
 
-![](docs/images/ebpf-spinlock.webp)
+![](docs/images/ebpf-copy-from-user-task.png)
 
-![](docs/images/ebpf-hashtable-expanded.webp)
+![](docs/images/ebpf-get-tsc.png)
 
-![](docs/images/ebpf-hashtable-collapsed.webp)
+![](docs/images/ebpf-spinlock.png)
 
-![](docs/images/ebpf-hashtable-lock-bucket.webp)
 
-![](docs/images/ebpf-lock-add-tsc-collapsed.webp)
 
-![](docs/images/ebpf-task-local-storage.webp)
 
 
 
