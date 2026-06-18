@@ -2,6 +2,8 @@
 
 **`brr`** is an eBPF program Runtime Reporter _and_ Profiler.
 
+![](docs/images/ebpf-lock-add-tsc-expanded.png)
+
 Since eBPF programs are pieces of machine code residing in (kernel) address space, you can profile them with standard `perf` just like any other kernel function. However, perf alone won't show you other useful metrics like number of executions and average eBPF program runtime, like [bpftop](https://github.com/jfernandez/bpftop) does. Also, I want an easy way to map CPU samples to original source code lines, where possible.
 
 I wanted to unify both approaches, display the bpftop-style call count & probe latency, with the ability to drill down into where _inside_ the eBPF program most of the time is spent. This tool is not calling the `perf` command under the hood, but uses `perf_event_open()` API directly. Also, it uses the `bpf()` syscall, for things like enabling eBPF program stats accounting (BPF\_ENABLE\_STATS) while `brr` is running. 
