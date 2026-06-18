@@ -16,7 +16,7 @@ $ sudo brr activity
 180  tracing     xcap_iorq_inser   0.0044      112     388      43566     424    250
 ```
 
-Just like the `brr top` "p" - profile option in TUI, you can run `brr profile` for drilling down into which eBPF program lines were most active (this relies on whatever perf events are available on your platform/VM (like hardware PMU CPU cycles vs software cpu-clock). You can list the available perf events using `brr perf-events` (defaults to HW CPU "cycles" when available):
+Just like the `brr top` "p" - profile command in TUI, you can run `brr profile` for drilling down into which eBPF program lines were most active. This relies on whatever perf events are available on your platform/VM (like hardware PMU CPU "cycles" vs software timer based "cpu-clock"). You can list the available perf events using `brr perf-events` (defaults to HW CPU "cycles" when available):
 
 ```
 $ sudo brr profile
@@ -71,7 +71,7 @@ CPU%    FILE        LINE  SOURCE
 0.0201  task.bpf.c   202      if (xcap_dump_kernel_stack_traces || xcap_dump_user_stack_traces) {                             
 0.0201  task.bpf.c   274      else if ((passive_syscall_nr == __NR_io_getevents || passive_syscall_nr == __NR_io_pgetevents ||
 ```
-The above profile only reports CPU samples falling into eBPF programs, but in reality, eBPF programs call helper functions that are part of the kernel and may trigger other things like pagefaults etc (in case of sleepable eBPF programs). The `--kernel-samples` option will act more like `perf record -g` option, walking up the stack callgraph of any kernel function and checking if a parent/ancestor function is an eBPF one (if yes, account this sample).
+The above profile only reports CPU samples falling into eBPF programs, but in reality, eBPF programs call separate helper functions that are part of the kernel and may even trigger other things like pagefault handlers etc (sleepable eBPF programs). The `--kernel-samples` option will act more like `perf record -g` option, walking up the stack callgraph of any kernel function and checking if its parent/ancestor caller is an eBPF program (if yes, account this sample).
 
 The `brr top` TUI will automatically capture kernel functions other than the eBPF programs and a little "+" will show up in front of eBPF code lines, if the CPU sample was executing a child function under it. You can expand/collapse it with "e" and "c", just like in the `perf` TUI.
 
@@ -170,4 +170,5 @@ Kernel/helper samples for program 181 (xcap_iorq_issue):
 CPU%    KIND    SYMBOL            MODULE  BPF_FILE            BPF_LINE  BPF_SOURCE                                                              
 0.0201  kernel  htab_lock_bucket  -       iorq_hashmap.bpf.c        56          if (bpf_map_update_elem(&iorq_tracking, &rq, &ni, BPF_ANY) != 0)
 ```
+I haven't put much thought under these CLI text reports yet, like how to add up and report Linux kernel function usage nested under eBPF programs. The `brr top` output is probably easier to navigate for now. For automation and agents, you can use `--json` or `--csv` options.
 
