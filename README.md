@@ -83,7 +83,7 @@ uv tool install .
 sudo env PATH="$PATH" brr
 ```
 
-Once you have the `brr` file, it's just like any other binary, you can copy it into any directory you'd like. The env tricks are not needed when you put the `brr` stand-alone binary to a directory that is in the PATH of sudo/root users (or just use fully qualified pathname when executing the program).
+Once you have the `brr` file, it's just like any other binary, you can copy and run it from any directory you like. The env tricks are not needed when you put the `brr` stand-alone binary to a directory that is in the PATH of sudo/root users (or just use fully qualified pathname when executing the program).
 
 
 ### Download Stand-alone binaries for ARM and X86
@@ -144,7 +144,7 @@ Most useful commands need root or equivalent Linux capabilities because they
 open BPF objects and CPU-wide perf events.
 
 
-Current help. You can run --help also for subcommands to get more detail, like `brr top --help`.
+The `--help` option shows the key features and options at higher level. You can run `--help` also for subcommands to get more detail, like `brr top --help`.
 
 ```
 $ sudo brr --help
