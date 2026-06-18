@@ -6,7 +6,7 @@ Since eBPF programs are pieces of machine code residing in (kernel) address spac
 
 I wanted to unify both approaches, display the bpftop-style call count & probe latency, with the ability to drill down into where _inside_ the eBPF program most of the time is spent. This tool is not calling the `perf` command under the hood, but uses `perf_event_open()` API directly. Also, it uses the `bpf()` syscall, for things like enabling eBPF program stats accounting (BPF\_ENABLE\_STATS) while `brr` is running. 
 
-I built this for my own use, but this tool/idea may be useful for others too. It's entirely AI-coded by Codex in Python using my specs & tests. It's good enough for my [performance testing](https://tanelpoder.com/posts/optimizing-ebpf-biolatency-accounting/) environments (not so sure about production).
+I built this for my own use, but this tool/idea may be useful for others too. It's entirely AI-coded by Codex in Python using my specs & tests. It's been good enough for my [performance testing](https://tanelpoder.com/posts/optimizing-ebpf-biolatency-accounting/) environments (but not so sure about production :-)
 
 1. [Jump to Installation section](#install)
 1. [Jump to command line options](#command-line-options)
