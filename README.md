@@ -85,6 +85,13 @@ sudo env PATH="$PATH" brr
 
 Once you have the `brr` file, it's just like any other binary, you can copy and run it from any directory you like. The env tricks are not needed when you put the `brr` stand-alone binary to a directory that is in the PATH of sudo/root users (or just use fully qualified pathname when executing the program).
 
+When installing from a DEB/RPM package or putting the standalone binary into a directory that's in root-visible PATH, then you just run:
+
+```
+sudo brr
+sudo /usr/bin/brr
+```
+
 
 ### Download Stand-alone binaries for ARM and X86
 
