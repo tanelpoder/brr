@@ -102,7 +102,7 @@ If you don't want to build from source and are happy to run binaries from random
 On x86:
 
 ```
-curl https://github.com/tanelpoder/brr/releases/download/v0.4.1/brr-0.4.1-linux-x86_64 -o brr
+curl -L https://github.com/tanelpoder/brr/releases/download/v0.4.1/brr-0.4.1-linux-x86_64 -o brr
 chmod u+x brr
 sudo ./brr
 ```
@@ -110,7 +110,7 @@ sudo ./brr
 On ARM:
 
 ```
-curl https://github.com/tanelpoder/brr/releases/download/v0.4.1/brr-0.4.1-linux-aarch64 -o brr
+curl -L https://github.com/tanelpoder/brr/releases/download/v0.4.1/brr-0.4.1-linux-aarch64 -o brr
 chmod u+x brr
 sudo ./brr
 ```
