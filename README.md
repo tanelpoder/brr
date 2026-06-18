@@ -1,6 +1,6 @@
 # eBPF Runtime Reporter and Profiler - brr
 
-**`brr`** is an eBPF program Runtime Reporter _and_ Profiler.
+**`brr`** is a Runtime Reporter and Profiler _for_ eBPF programs.
 
 ![](docs/images/ebpf-lock-add-tsc-expanded.png)
 
