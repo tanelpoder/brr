@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import struct
+from types import SimpleNamespace
 
+import pytest
+
+from brr import profiler
 from brr.profiler import (
     PERF_MMAP_DATA_HEAD_OFFSET,
     PERF_MMAP_DATA_OFFSET_OFFSET,
@@ -12,9 +16,25 @@ from brr.profiler import (
     PERF_RECORD_THROTTLE,
     PERF_RECORD_UNTHROTTLE,
     PERF_SAMPLE_IP,
+    PerfRingMemoryOrder,
     parse_perf_mmap_ring,
     parse_perf_records,
 )
+
+
+class FakeAtomicFunction:
+    argtypes: list[object]
+    restype: object
+
+    def __call__(self, *_args) -> None:
+        return None
+
+
+def fake_atomic_library() -> SimpleNamespace:
+    return SimpleNamespace(
+        __atomic_load_8=FakeAtomicFunction(),
+        __atomic_store_8=FakeAtomicFunction(),
+    )
 
 
 def _record(record_type: int, payload: bytes = b"") -> bytes:
@@ -86,3 +106,32 @@ def test_incremental_ring_drain_handles_wrap_and_advances_tail() -> None:
     assert struct.unpack_from("<Q", ring, PERF_MMAP_DATA_TAIL_OFFSET)[0] == (
         second_start + len(second)
     )
+
+
+def test_perf_ring_memory_order_tries_bundled_libatomic_soname(monkeypatch) -> None:
+    loaded_names = []
+    monkeypatch.setattr(profiler.ctypes.util, "find_library", lambda _name: None)
+    monkeypatch.setattr(
+        profiler.ctypes,
+        "CDLL",
+        lambda name: loaded_names.append(name) or fake_atomic_library(),
+    )
+
+    memory_order = PerfRingMemoryOrder()
+
+    assert memory_order._atomic is not None
+    assert loaded_names == ["libatomic.so.1"]
+
+
+def test_perf_ring_memory_order_preserves_missing_library_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(profiler.ctypes.util, "find_library", lambda _name: None)
+    monkeypatch.setattr(
+        profiler.ctypes,
+        "CDLL",
+        lambda _name: (_ for _ in ()).throw(OSError("missing")),
+    )
+    monkeypatch.setattr(profiler.platform, "machine", lambda: "aarch64")
+    memory_order = PerfRingMemoryOrder()
+
+    with pytest.raises(profiler.UnsupportedFeatureError, match="libatomic is required"):
+        memory_order.load_acquire(bytearray(16), 0)

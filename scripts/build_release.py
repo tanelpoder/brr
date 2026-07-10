@@ -4,9 +4,11 @@ import argparse
 import hashlib
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -29,14 +31,20 @@ class Architecture:
     artifact: str
     deb: str
     rpm: str
+    elf_machine: int
 
 
 ARCHITECTURES = {
-    "x86_64": Architecture(artifact="x86_64", deb="amd64", rpm="x86_64"),
-    "amd64": Architecture(artifact="x86_64", deb="amd64", rpm="x86_64"),
-    "aarch64": Architecture(artifact="aarch64", deb="arm64", rpm="aarch64"),
-    "arm64": Architecture(artifact="aarch64", deb="arm64", rpm="aarch64"),
+    "x86_64": Architecture(artifact="x86_64", deb="amd64", rpm="x86_64", elf_machine=62),
+    "amd64": Architecture(artifact="x86_64", deb="amd64", rpm="x86_64", elf_machine=62),
+    "aarch64": Architecture(artifact="aarch64", deb="arm64", rpm="aarch64", elf_machine=183),
+    "arm64": Architecture(artifact="aarch64", deb="arm64", rpm="aarch64", elf_machine=183),
 }
+
+ELF_MAGIC = b"\x7fELF"
+GLIBC_VERSION_PATTERN = re.compile(r"\bGLIBC_(\d+(?:\.\d+)*)\b")
+RHEL8_MAX_GLIBC = (2, 28)
+RHEL8_REQUIRED_BUNDLED_LIBRARIES = {"libatomic.so.1"}
 
 
 @dataclass(frozen=True)
@@ -51,11 +59,13 @@ def main() -> int:
     metadata = read_project_metadata()
     architecture = detect_architecture()
 
-    ensure_tools(targets)
+    ensure_tools(targets, rhel8_compatible=args.rhel8_compatible)
     prepare_output_dirs(clean=args.clean)
 
     binary = build_binary()
     smoke_test_binary(binary)
+    if args.rhel8_compatible:
+        verify_rhel8_compatibility(binary, architecture)
 
     artifacts: list[Path] = []
     if "binary" in targets:
@@ -90,6 +100,11 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         dest="clean",
         help="Reuse existing build directories instead of cleaning release output first.",
+    )
+    parser.add_argument(
+        "--rhel8-compatible",
+        action="store_true",
+        help="Require every bundled ELF to use GLIBC 2.28 or older and include libatomic.",
     )
     parser.set_defaults(clean=True)
     return parser.parse_args()
@@ -127,14 +142,16 @@ def detect_architecture() -> Architecture:
     return architecture
 
 
-def ensure_tools(targets: set[str]) -> None:
+def ensure_tools(targets: set[str], *, rhel8_compatible: bool = False) -> None:
     missing = []
     if "deb" in targets and shutil.which("dpkg-deb") is None:
         missing.append("dpkg-deb")
     if "rpm" in targets and shutil.which("rpmbuild") is None:
         missing.append("rpmbuild")
+    if rhel8_compatible and shutil.which("readelf") is None:
+        missing.append("readelf")
     if missing:
-        raise SystemExit(f"missing required packaging tools: {', '.join(missing)}")
+        raise SystemExit(f"missing required build tools: {', '.join(missing)}")
 
 
 def prepare_output_dirs(*, clean: bool) -> None:
@@ -192,6 +209,117 @@ def smoke_test_binary(binary: Path) -> None:
     )
     if "not found" in result.stdout or "not found" in result.stderr:
         raise SystemExit(f"binary has unresolved shared libraries:\n{result.stdout}{result.stderr}")
+
+
+def verify_rhel8_compatibility(
+    binary: Path,
+    architecture: Architecture,
+    *,
+    archive_reader: object | None = None,
+) -> None:
+    payloads = collect_elf_payloads(binary, archive_reader=archive_reader)
+    bundled_names = {name for name, _data in payloads[1:]}
+    missing_libraries = sorted(RHEL8_REQUIRED_BUNDLED_LIBRARIES - bundled_names)
+    if missing_libraries:
+        missing = ", ".join(missing_libraries)
+        raise SystemExit(f"RHEL 8 compatibility check failed: missing bundled library: {missing}")
+
+    architecture_errors: list[str] = []
+    glibc_errors: list[str] = []
+    highest_version: tuple[int, ...] = ()
+    highest_name = ""
+    for name, data in payloads:
+        machine = read_elf_machine(data)
+        if machine != architecture.elf_machine:
+            architecture_errors.append(
+                f"{name} uses ELF machine {machine}, expected {architecture.elf_machine}"
+            )
+
+        versions = read_glibc_versions(data, display_name=name)
+        if not versions:
+            continue
+        maximum = max(versions)
+        if maximum > highest_version:
+            highest_version = maximum
+            highest_name = name
+        if maximum > RHEL8_MAX_GLIBC:
+            glibc_errors.append(f"{name} requires GLIBC_{format_version(maximum)}")
+
+    errors = architecture_errors + glibc_errors
+    if errors:
+        details = "\n".join(f"  {error}" for error in errors)
+        raise SystemExit(f"RHEL 8 compatibility check failed:\n{details}")
+
+    maximum = format_version(highest_version) if highest_version else "none"
+    suffix = f" (from {highest_name})" if highest_name else ""
+    print(
+        f"Verified {len(payloads)} ELF files: highest required GLIBC_{maximum}{suffix}; "
+        f"architecture {architecture.artifact}; bundled libatomic.so.1"
+    )
+
+
+def collect_elf_payloads(
+    binary: Path,
+    *,
+    archive_reader: object | None = None,
+) -> list[tuple[str, bytes]]:
+    binary_data = binary.read_bytes()
+    if not binary_data.startswith(ELF_MAGIC):
+        raise SystemExit(f"release artifact is not an ELF executable: {binary}")
+
+    if archive_reader is None:
+        try:
+            from PyInstaller.archive.readers import CArchiveReader
+        except ImportError as error:
+            raise SystemExit("PyInstaller is required to inspect the one-file archive") from error
+        archive_reader = CArchiveReader(str(binary))
+
+    payloads = [("outer executable", binary_data)]
+    for name in archive_reader.toc:
+        data = archive_reader.extract(name)
+        if data.startswith(ELF_MAGIC):
+            payloads.append((name, data))
+    return payloads
+
+
+def read_elf_machine(data: bytes) -> int | None:
+    if len(data) < 20 or not data.startswith(ELF_MAGIC):
+        return None
+    if data[5] == 1:
+        byteorder = "little"
+    elif data[5] == 2:
+        byteorder = "big"
+    else:
+        return None
+    return int.from_bytes(data[18:20], byteorder=byteorder)
+
+
+def read_glibc_versions(data: bytes, *, display_name: str) -> set[tuple[int, ...]]:
+    with tempfile.NamedTemporaryFile(prefix="brr-elf-") as elf_file:
+        elf_file.write(data)
+        elf_file.flush()
+        result = subprocess.run(
+            ["readelf", "--version-info", "--wide", elf_file.name],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise SystemExit(f"readelf failed for {display_name}: {detail}")
+    return parse_glibc_versions(result.stdout)
+
+
+def parse_glibc_versions(readelf_output: str) -> set[tuple[int, ...]]:
+    return {
+        tuple(int(component) for component in match.split("."))
+        for match in GLIBC_VERSION_PATTERN.findall(readelf_output)
+    }
+
+
+def format_version(version: tuple[int, ...]) -> str:
+    return ".".join(str(component) for component in version)
 
 
 def build_binary_artifact(

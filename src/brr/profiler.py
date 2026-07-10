@@ -254,8 +254,11 @@ class PerfOpenError(OSError):
 
 class PerfRingMemoryOrder:
     def __init__(self) -> None:
-        library_name = ctypes.util.find_library("atomic")
-        self._atomic = ctypes.CDLL(library_name) if library_name is not None else None
+        library_name = ctypes.util.find_library("atomic") or "libatomic.so.1"
+        try:
+            self._atomic = ctypes.CDLL(library_name)
+        except OSError:
+            self._atomic = None
         if self._atomic is not None:
             self._load = getattr(self._atomic, "__atomic_load_8")
             self._load.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.c_int]
