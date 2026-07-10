@@ -2,6 +2,11 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+.DS_Store
+.env
+.env.*
+!.env.example
+
 .pytest_cache/
 .ruff_cache/
 .venv/
