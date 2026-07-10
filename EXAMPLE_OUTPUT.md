@@ -18,6 +18,14 @@ $ sudo brr activity
 
 Just like the `brr top` "p" - profile command in TUI, you can run `brr profile` for drilling down into which eBPF program lines were most active. This relies on whatever perf events are available on your platform/VM (like hardware PMU CPU "cycles" vs software timer based "cpu-clock"). You can list the available perf events using `brr perf-events` (defaults to HW CPU "cycles" when available):
 
+The profiler continuously polls and drains its per-CPU perf rings. It prints a
+capture summary with the automatically selected pages per CPU, drain interval,
+peak ring occupancy, and perf running percentage. Any kernel-reported loss,
+throttling, ring overrun, malformed record, or multiplexing is called out as an
+incomplete profile. Use `--fail-on-loss` in automation to make an incomplete
+capture exit with status 1, or override the automatic sizing with
+`--perf-buffer-pages` and `--perf-drain-ms`.
+
 ```
 $ sudo brr profile
 
@@ -171,4 +179,3 @@ CPU%    KIND    SYMBOL            MODULE  BPF_FILE            BPF_LINE  BPF_SOUR
 0.0201  kernel  htab_lock_bucket  -       iorq_hashmap.bpf.c        56          if (bpf_map_update_elem(&iorq_tracking, &rq, &ni, BPF_ANY) != 0)
 ```
 I haven't put much thought under these CLI text reports yet, like how to add up and report Linux kernel function usage nested under eBPF programs. The `brr top` output is probably easier to navigate for now. For automation and agents, you can use `--json` or `--csv` options.
-

@@ -285,7 +285,7 @@ def deb_control(metadata: ProjectMetadata, architecture: Architecture) -> str:
             "Section: utils",
             "Priority: optional",
             f"Architecture: {architecture.deb}",
-            "Depends: libc6, zlib1g",
+            "Depends: libc6, zlib1g, libatomic1",
             f"Maintainer: {MAINTAINER}",
             f"Description: {metadata.description}",
             " brr reports and profiles loaded Linux eBPF objects.",
@@ -347,6 +347,7 @@ Release:        {PACKAGE_RELEASE}%{{?dist}}
 Summary:        {metadata.description}
 License:        {LICENSE}
 URL:            https://github.com/tanelpoder/brr
+Requires:       libatomic
 
 %description
 brr reports and profiles loaded Linux eBPF objects.

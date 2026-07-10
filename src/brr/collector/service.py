@@ -23,7 +23,7 @@ from brr.profiler import (
     KallsymsResolver,
     PerfEventAvailability,
     PerfSampler,
-    build_profile,
+    ProfileAccumulator,
     choose_perf_event,
     list_openable_perf_events,
 )
@@ -108,6 +108,8 @@ class BpfSnapshotService:
         line_limit: int,
         kernel_samples: bool = False,
         call_graph: CallGraphMode = "fp",
+        perf_buffer_pages: int | None = None,
+        perf_drain_ms: int | None = None,
     ) -> BpfProfile:
         selected_event = choose_perf_event(
             requested_event,
@@ -117,17 +119,8 @@ class BpfSnapshotService:
         details = self.collector.list_program_details()
         pinned = self.bpffs_scanner.scan_pinned_paths(self.collector)["program"]
         details = self._attach_program_details_pins(details, pinned)
-        result = self._profiler().sample(
-            event=selected_event,
-            duration=duration,
-            frequency=frequency,
-            callchain=kernel_samples,
-            call_graph=call_graph,
-        )
-        return build_profile(
+        accumulator = ProfileAccumulator(
             program_details=details,
-            samples=result.samples,
-            lost_samples=result.lost_samples,
             requested_event=requested_event,
             selected_event=selected_event.name,
             duration=duration,
@@ -137,8 +130,18 @@ class BpfSnapshotService:
             kernel_samples=kernel_samples,
             call_graph=call_graph,
             kernel_symbol_resolver=KallsymsResolver.from_proc() if kernel_samples else None,
-            warnings=result.warnings,
         )
+        result = self._profiler().sample(
+            event=selected_event,
+            duration=duration,
+            frequency=frequency,
+            callchain=kernel_samples,
+            call_graph=call_graph,
+            buffer_pages=perf_buffer_pages,
+            drain_interval_ms=perf_drain_ms,
+            on_samples=accumulator.consume,
+        )
+        return accumulator.finish(capture=result)
 
     def collect_profile_for_program(
         self,
@@ -150,6 +153,8 @@ class BpfSnapshotService:
         line_limit: int,
         kernel_samples: bool = False,
         call_graph: CallGraphMode = "fp",
+        perf_buffer_pages: int | None = None,
+        perf_drain_ms: int | None = None,
     ) -> BpfProfile:
         selected_event = choose_perf_event(
             requested_event,
@@ -159,17 +164,8 @@ class BpfSnapshotService:
         details = self.collector.list_program_details()
         pinned = self.bpffs_scanner.scan_pinned_paths(self.collector)["program"]
         details = self._attach_program_details_pins(details, pinned)
-        result = self._profiler().sample(
-            event=selected_event,
-            duration=duration,
-            frequency=frequency,
-            callchain=kernel_samples,
-            call_graph=call_graph,
-        )
-        return build_profile(
+        accumulator = ProfileAccumulator(
             program_details=details,
-            samples=result.samples,
-            lost_samples=result.lost_samples,
             requested_event=requested_event,
             selected_event=selected_event.name,
             duration=duration,
@@ -180,8 +176,18 @@ class BpfSnapshotService:
             kernel_samples=kernel_samples,
             call_graph=call_graph,
             kernel_symbol_resolver=KallsymsResolver.from_proc() if kernel_samples else None,
-            warnings=result.warnings,
         )
+        result = self._profiler().sample(
+            event=selected_event,
+            duration=duration,
+            frequency=frequency,
+            callchain=kernel_samples,
+            call_graph=call_graph,
+            buffer_pages=perf_buffer_pages,
+            drain_interval_ms=perf_drain_ms,
+            on_samples=accumulator.consume,
+        )
+        return accumulator.finish(capture=result)
 
     def collect_perf_events(self, *, frequency: int = 997) -> list[PerfEventAvailability]:
         return list_openable_perf_events(opener=self._profiler().opener, frequency=frequency)

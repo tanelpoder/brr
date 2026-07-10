@@ -163,7 +163,7 @@ def render_profile(
     source_context_by_program: dict[int, SourceContextReport] | None = None,
 ) -> str:
     if not profile.items:
-        return "\n".join([*_profile_warning_lines(profile), "No BPF JIT samples captured."])
+        return "\n".join([*_profile_capture_lines(profile), "No BPF JIT samples captured."])
 
     show_kernel_summary = any(program.kernel_samples for program in profile.items)
     program_rows = [
@@ -175,7 +175,7 @@ def render_profile(
         )
         for program in profile.items
     ]
-    rendered = [*_profile_warning_lines(profile), _render_table(program_rows)]
+    rendered = [*_profile_capture_lines(profile), _render_table(program_rows)]
     for program in profile.items:
         source_context = (
             source_context_by_program.get(program.id)
@@ -211,6 +211,35 @@ def render_profile(
 
 def _profile_warning_lines(profile: BpfProfile) -> list[str]:
     return [f"Warning: {warning}" for warning in profile.metadata.warnings]
+
+
+def _profile_capture_lines(profile: BpfProfile) -> list[str]:
+    metadata = profile.metadata
+    lines: list[str] = []
+    if metadata.perf_buffer_pages_per_cpu:
+        lines.append(
+            "Perf capture: "
+            f"actual={metadata.actual_duration:.3f}s "
+            f"cpus={len(metadata.perf_cpus)} "
+            f"buffer={metadata.perf_buffer_pages_per_cpu}pages/cpu "
+            f"total={metadata.perf_buffer_bytes_total}B "
+            f"drain={metadata.perf_drain_interval_ms}ms "
+            f"occupancy={metadata.perf_max_ring_occupancy_percent:.1f}% "
+            f"running={metadata.perf_running_percent:.2f}%"
+        )
+        lines.append(
+            "Perf records: "
+            f"drains={metadata.perf_drain_count} "
+            f"lost={metadata.lost_samples} "
+            f"throttle={metadata.perf_throttle_events} "
+            f"unthrottle={metadata.perf_unthrottle_events} "
+            f"malformed={metadata.perf_malformed_records} "
+            f"unknown={metadata.perf_unknown_records} "
+            f"discarded_bytes={metadata.perf_discarded_bytes} "
+            f"incomplete={'yes' if metadata.incomplete else 'no'}"
+        )
+    lines.extend(_profile_warning_lines(profile))
+    return lines
 
 
 def render_perf_events(events: list[PerfEventAvailability]) -> str:

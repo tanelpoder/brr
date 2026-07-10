@@ -67,6 +67,8 @@ PROFILE_OPTION_INPUT_ORDER = (
     "profile-frequency",
     "profile-event",
     "profile-call-graph",
+    "profile-buffer-pages",
+    "profile-drain-ms",
 )
 PROFILE_OPTION_INPUT_IDS = frozenset(PROFILE_OPTION_INPUT_ORDER)
 PROFILE_OPTION_WIDGET_ORDER = (*PROFILE_OPTION_INPUT_ORDER, "profile-kernel-samples")
@@ -369,6 +371,15 @@ class BrrConfig:
     call_graph: CallGraphMode = "fp"
     extended: bool = False
     cumulative: bool = False
+    perf_buffer_pages: int | None = None
+    perf_drain_ms: int | None = None
+    fail_on_loss: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class BrrTextModeResult:
+    text: str
+    incomplete: bool = False
 
 
 def _terminfo_colors(environ: MutableMapping[str, str]) -> int | None:
@@ -537,6 +548,25 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
             "Defaults to the current directory."
         ),
     )
+    parser.add_argument(
+        "--perf-buffer-pages",
+        type=_auto_power_of_two,
+        default=None,
+        metavar="auto|PAGES",
+        help="Per-CPU perf data pages as a power of two. Default: auto.",
+    )
+    parser.add_argument(
+        "--perf-drain-ms",
+        type=_auto_positive_int,
+        default=None,
+        metavar="auto|MS",
+        help="Maximum milliseconds between full perf ring sweeps. Default: auto.",
+    )
+    parser.add_argument(
+        "--fail-on-loss",
+        action="store_true",
+        help="In profiled textmode output, exit with status 1 if capture is incomplete.",
+    )
 
 
 def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
@@ -560,6 +590,9 @@ def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
         call_graph=args.call_graph,
         extended=getattr(args, "extended", False),
         cumulative=getattr(args, "cumulative", False),
+        perf_buffer_pages=args.perf_buffer_pages,
+        perf_drain_ms=args.perf_drain_ms,
+        fail_on_loss=args.fail_on_loss,
     )
 
 
@@ -579,6 +612,21 @@ def render_textmode(
     profile_top: bool = False,
     program_id: int | None = None,
 ) -> str:
+    return render_textmode_result(
+        service,
+        config,
+        profile_top=profile_top,
+        program_id=program_id,
+    ).text
+
+
+def render_textmode_result(
+    service: BpfSnapshotService,
+    config: BrrConfig,
+    *,
+    profile_top: bool = False,
+    program_id: int | None = None,
+) -> BrrTextModeResult:
     activity = collect_activity_report(
         service,
         duration=config.delay,
@@ -597,6 +645,7 @@ def render_textmode(
     )
 
     selected_program_id = program_id or _top_program_id(activity, profile_top=profile_top)
+    incomplete = False
     if selected_program_id is not None:
         inspect = collect_inspect_report(
             service,
@@ -609,6 +658,8 @@ def render_textmode(
             line_limit=config.line_limit,
             kernel_samples=config.kernel_samples,
             call_graph=config.call_graph,
+            perf_buffer_pages=config.perf_buffer_pages,
+            perf_drain_ms=config.perf_drain_ms,
         )
         inspect = _maybe_enrich_inspect_report(
             inspect,
@@ -625,10 +676,11 @@ def render_textmode(
                 instruction_source=inspect.instruction_source,
             )
         sections.append(render_brr_inspect(inspect, extended=config.extended))
+        incomplete = bool(inspect.profile and inspect.profile.metadata.incomplete)
     elif profile_top:
         sections.append("BRR PROFILE program=-\nNo program selected for profiling.")
 
-    return "\n\n".join(sections)
+    return BrrTextModeResult(text="\n\n".join(sections), incomplete=incomplete)
 
 
 def _maybe_enrich_inspect_report(
@@ -672,6 +724,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         event: str
         kernel_samples: bool = False
         call_graph: CallGraphMode = "fp"
+        perf_buffer_pages: int | None = None
+        perf_drain_ms: int | None = None
 
     @dataclass(frozen=True, slots=True)
     class ActivityRefreshResult:
@@ -858,6 +912,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     Input(id="profile-frequency", placeholder="frequency Hz"),
                     Input(id="profile-event", placeholder="auto, cycles:p, cycles, cpu-clock"),
                     Input(id="profile-call-graph", placeholder="call graph: fp, lbr"),
+                    Input(id="profile-buffer-pages", placeholder="perf pages: auto, 8, 16..."),
+                    Input(id="profile-drain-ms", placeholder="drain ms: auto, 100..."),
                     Checkbox("kernel/helper samples", id="profile-kernel-samples"),
                     id="profile-options",
                 ),
@@ -1271,6 +1327,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     event=self.config.event,
                     kernel_samples=True,
                     call_graph=self.config.call_graph,
+                    perf_buffer_pages=self.config.perf_buffer_pages,
+                    perf_drain_ms=self.config.perf_drain_ms,
                 )
             )
 
@@ -1287,10 +1345,16 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.query_one("#profile-frequency", Input).value = str(self.config.frequency)
             self.query_one("#profile-event", Input).value = self.config.event
             self.query_one("#profile-call-graph", Input).value = self.config.call_graph
+            self.query_one("#profile-buffer-pages", Input).value = _auto_value(
+                self.config.perf_buffer_pages
+            )
+            self.query_one("#profile-drain-ms", Input).value = _auto_value(
+                self.config.perf_drain_ms
+            )
             self.query_one("#profile-kernel-samples", Checkbox).value = self.config.kernel_samples
             self._set_profile_options_visible(True)
             self.query_one("#inspect-status", Static).update(
-                "Edit duration, frequency, event, call graph, and kernel/helper samples; "
+                "Edit duration, frequency, event, call graph, perf buffers, and samples; "
                 "press Enter to profile"
             )
             self.query_one("#profile-duration", Input).focus()
@@ -1415,6 +1479,16 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             if call_graph == "lbr" and not kernel_samples:
                 status.update("lbr call graph requires kernel/helper samples")
                 return
+            try:
+                perf_buffer_pages = _parse_auto_power_of_two(
+                    self.query_one("#profile-buffer-pages", Input).value
+                )
+                perf_drain_ms = _parse_auto_positive_int(
+                    self.query_one("#profile-drain-ms", Input).value
+                )
+            except ValueError as exc:
+                status.update(str(exc))
+                return
             self.profile_options_open = False
             self._set_profile_options_visible(False)
             self.refresh_bindings()
@@ -1425,6 +1499,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     event=event,
                     kernel_samples=kernel_samples,
                     call_graph=call_graph,
+                    perf_buffer_pages=perf_buffer_pages,
+                    perf_drain_ms=perf_drain_ms,
                 )
             )
 
@@ -1451,6 +1527,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                         line_limit=self.config.line_limit,
                         kernel_samples=options.kernel_samples,
                         call_graph=options.call_graph,
+                        perf_buffer_pages=options.perf_buffer_pages,
+                        perf_drain_ms=options.perf_drain_ms,
                     )
                 profile_program = profile.items[0] if profile.items else None
                 hotspots = profile_program.hotspots if profile_program is not None else []
@@ -2036,6 +2114,50 @@ def _non_negative_int(value: str) -> int:
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be 0 or greater")
     return parsed
+
+
+def _auto_power_of_two(value: str) -> int | None:
+    try:
+        return _parse_auto_power_of_two(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _auto_positive_int(value: str) -> int | None:
+    try:
+        return _parse_auto_positive_int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _parse_auto_power_of_two(value: str) -> int | None:
+    text = value.strip().lower()
+    if not text or text == "auto":
+        return None
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise ValueError("perf buffer pages must be auto or an integer") from exc
+    if parsed <= 0 or parsed & (parsed - 1):
+        raise ValueError("perf buffer pages must be auto or a positive power of two")
+    return parsed
+
+
+def _parse_auto_positive_int(value: str) -> int | None:
+    text = value.strip().lower()
+    if not text or text == "auto":
+        return None
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise ValueError("perf drain milliseconds must be auto or an integer") from exc
+    if parsed <= 0:
+        raise ValueError("perf drain milliseconds must be greater than zero")
+    return parsed
+
+
+def _auto_value(value: int | None) -> str:
+    return "auto" if value is None else str(value)
 
 
 def _perf_event_name(value: str) -> str:

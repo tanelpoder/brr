@@ -151,6 +151,23 @@ class BpfProfileMetadata:
     kernel_unattributed_samples: int = 0
     kernel_symbolized_samples: int = 0
     call_graph: str = "fp"
+    actual_duration: float = 0.0
+    perf_cpus: tuple[int, ...] = ()
+    perf_buffer_pages_per_cpu: int = 0
+    perf_buffer_bytes_per_cpu: int = 0
+    perf_buffer_bytes_total: int = 0
+    perf_drain_interval_ms: int = 0
+    perf_drain_count: int = 0
+    perf_max_ring_occupancy_percent: float = 0.0
+    perf_throttle_events: int = 0
+    perf_unthrottle_events: int = 0
+    perf_malformed_records: int = 0
+    perf_unknown_records: int = 0
+    perf_discarded_bytes: int = 0
+    perf_time_enabled_ns: int = 0
+    perf_time_running_ns: int = 0
+    perf_running_percent: float = 100.0
+    incomplete: bool = False
     warnings: tuple[str, ...] = ()
 
 

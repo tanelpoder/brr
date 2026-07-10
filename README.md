@@ -176,6 +176,24 @@ Profile BPF JIT CPU samples:
 sudo brr profile --duration 5 --event auto
 ```
 
+`brr` drains each per-CPU perf mmap ring continuously while profiling. Ring
+capacity and the maximum sweep interval are selected from the sample frequency,
+record shape, online CPU count, and `kernel.perf_event_mlock_kb`. They can be
+overridden when tuning or diagnosing a host:
+
+```bash
+sudo brr profile -F 997 --perf-buffer-pages 128 --perf-drain-ms 25
+sudo brr profile -F 997 --fail-on-loss
+```
+
+`--perf-buffer-pages` must be `auto` or a power-of-two page count per CPU;
+`--perf-drain-ms` accepts `auto` or a positive number of milliseconds. Profile
+output reports ring sizing, drain count, peak occupancy, perf enabled/running
+time, kernel loss/throttle records, parser discards, and warnings. With
+`--fail-on-loss`, an incomplete CLI or `top --textmode` profile is still printed
+but the command exits with status 1. JSON and CSV include the same capture
+telemetry for automation.
+
 List perf events that `brr` can open on the current host:
 
 ```bash

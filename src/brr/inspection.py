@@ -146,7 +146,11 @@ def profile_status_message(
     base = (
         f"profiled {program_id}: event={metadata.selected_event} "
         f"total_samples={metadata.total_samples} "
-        f"lost={metadata.lost_samples}; selected program samples={selected_samples}; "
+        f"lost={metadata.lost_samples} "
+        f"buffer={metadata.perf_buffer_pages_per_cpu}pages/cpu "
+        f"occupancy={metadata.perf_max_ring_occupancy_percent:.1f}% "
+        f"running={metadata.perf_running_percent:.2f}%; "
+        f"selected program samples={selected_samples}; "
         f"attributed kernel/helper samples={selected_kernel_samples}; "
         f"other BPF program samples={metadata.other_bpf_samples}; "
         f"outside BPF samples={outside_bpf_samples}"
@@ -192,6 +196,8 @@ def collect_inspect_report(
     line_limit: int,
     kernel_samples: bool = False,
     call_graph: CallGraphMode = "fp",
+    perf_buffer_pages: int | None = None,
+    perf_drain_ms: int | None = None,
     bpftool_provider: BpftoolProvider | None = None,
 ) -> BrrInspectReport:
     dump = service.collect_program_dump(program_id)
@@ -208,6 +214,8 @@ def collect_inspect_report(
             line_limit=line_limit,
             kernel_samples=kernel_samples,
             call_graph=call_graph,
+            perf_buffer_pages=perf_buffer_pages,
+            perf_drain_ms=perf_drain_ms,
         )
         profile_program = profile_result.items[0] if profile_result.items else None
         hotspots = profile_program.hotspots if profile_program is not None else []

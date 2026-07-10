@@ -17,3 +17,9 @@ class UnsupportedFeatureError(BrrError):
     """Raised when required kernel features are unavailable."""
 
     exit_code = 3
+
+
+class PerfBufferAllocationError(BrrError):
+    """Raised when perf sampling buffers cannot be allocated safely."""
+
+    exit_code = 1

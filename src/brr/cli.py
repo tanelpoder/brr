@@ -44,7 +44,7 @@ from brr.render.text import (
     render_programs,
 )
 from brr.source_context import SourceContextEnricher, SourceContextReport
-from brr.top import add_top_arguments, config_from_args, render_textmode, run_tui
+from brr.top import add_top_arguments, config_from_args, render_textmode_result, run_tui
 
 PROGRAM_DESCRIPTION = "eBPF Runtime Reporter and Profiler by Tanel Poder (tanelpoder.com)."
 
@@ -84,6 +84,21 @@ def _non_negative_int(value: str) -> int:
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be 0 or greater")
     return parsed
+
+
+def _auto_power_of_two(value: str) -> int | None:
+    if value.strip().lower() == "auto":
+        return None
+    parsed = _positive_int(value)
+    if parsed & (parsed - 1):
+        raise argparse.ArgumentTypeError("must be 'auto' or a positive power of two")
+    return parsed
+
+
+def _auto_positive_int(value: str) -> int | None:
+    if value.strip().lower() == "auto":
+        return None
+    return _positive_int(value)
 
 
 def _perf_event_name(value: str) -> str:
@@ -152,6 +167,28 @@ def _add_devmode_options(parser: argparse.ArgumentParser) -> None:
             "Read matching source files from DIR to fill missing source lines. "
             "Defaults to the current directory."
         ),
+    )
+
+
+def _add_perf_buffer_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--perf-buffer-pages",
+        type=_auto_power_of_two,
+        default=None,
+        metavar="auto|PAGES",
+        help="Per-CPU perf data pages as a power of two. Default: auto.",
+    )
+    parser.add_argument(
+        "--perf-drain-ms",
+        type=_auto_positive_int,
+        default=None,
+        metavar="auto|MS",
+        help="Maximum milliseconds between full perf ring sweeps. Default: auto.",
+    )
+    parser.add_argument(
+        "--fail-on-loss",
+        action="store_true",
+        help="Print incomplete profile output but exit with status 1.",
     )
 
 
@@ -373,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show JIT addresses and full source paths in text output.",
     )
+    _add_perf_buffer_options(profile_parser)
     return parser
 
 
@@ -443,14 +481,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif object_type == "top":
             config = config_from_args(args, bpffs=args.bpffs)
             if args.textmode:
-                print(
-                    render_textmode(
-                        service,
-                        config,
-                        profile_top=args.profile_top,
-                        program_id=args.program_id,
-                    )
+                result = render_textmode_result(
+                    service,
+                    config,
+                    profile_top=args.profile_top,
+                    program_id=args.program_id,
                 )
+                print(result.text)
+                if config.fail_on_loss and result.incomplete:
+                    return 1
             else:
                 return run_tui(service, config)
         elif object_type == "map":
@@ -525,6 +564,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     line_limit=args.line_limit,
                     kernel_samples=args.kernel_samples,
                     call_graph=args.call_graph,
+                    perf_buffer_pages=args.perf_buffer_pages,
+                    perf_drain_ms=args.perf_drain_ms,
                 )
             else:
                 profile = service.collect_profile(
@@ -535,6 +576,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     line_limit=args.line_limit,
                     kernel_samples=args.kernel_samples,
                     call_graph=args.call_graph,
+                    perf_buffer_pages=args.perf_buffer_pages,
+                    perf_drain_ms=args.perf_drain_ms,
                 )
             source_context_by_program = None
             devdir = _devmode_dir(args)
@@ -570,6 +613,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         source_context_by_program=source_context_by_program,
                     )
                 )
+            if args.fail_on_loss and profile.metadata.incomplete:
+                return 1
         else:
             parser.error(f"unsupported object type: {object_type}")
     except BrrError as exc:

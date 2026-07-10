@@ -223,7 +223,17 @@ def _profile_sample_summary(metadata: BpfProfileMetadata) -> str:
         f"other_bpf={metadata.other_bpf_samples} "
         f"source_mapped={metadata.source_mapped_samples} "
         f"source_unmapped={metadata.source_unmapped_samples} "
-        f"call_graph={metadata.call_graph}"
+        f"call_graph={metadata.call_graph} "
+        f"buffer_pages={metadata.perf_buffer_pages_per_cpu} "
+        f"drain_ms={metadata.perf_drain_interval_ms} "
+        f"drains={metadata.perf_drain_count} "
+        f"occupancy={metadata.perf_max_ring_occupancy_percent:.1f}% "
+        f"running={metadata.perf_running_percent:.2f}% "
+        f"lost={metadata.lost_samples} "
+        f"throttle={metadata.perf_throttle_events} "
+        f"malformed={metadata.perf_malformed_records} "
+        f"discarded_bytes={metadata.perf_discarded_bytes} "
+        f"incomplete={'yes' if metadata.incomplete else 'no'}"
     )
     if not any(
         (
