@@ -26,6 +26,14 @@ incomplete profile. Use `--fail-on-loss` in automation to make an incomplete
 capture exit with status 1, or override the automatic sizing with
 `--perf-buffer-pages` and `--perf-drain-ms`.
 
+For tiny, frequently executed BPF programs, a five-second 997 Hz profile may be
+healthy but still contain too few BPF samples for a stable source-line ranking.
+Prefer `cycles` at a higher supported frequency and a longer duration for
+hotspot work. Add `--kernel-samples` when helper and kernel functions called by
+the BPF program are part of the CPU cost you want to measure. The direct and
+inclusive views answer different questions; helper samples are intentionally
+absent from the direct view.
+
 ```
 $ sudo brr profile
 

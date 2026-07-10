@@ -194,6 +194,25 @@ time, kernel loss/throttle records, parser discards, and warnings. With
 but the command exits with status 1. JSON and CSV include the same capture
 telemetry for automation.
 
+Very short BPF programs may receive only a handful of samples at 997 Hz,
+especially with `cpu-clock`. For stable program and source-line rankings, use a
+hardware `cycles` event when available, increase the frequency within the
+host's `kernel.perf_event_max_sample_rate`, and/or profile for longer:
+
+```bash
+sudo brr profile --event cycles -F 9997 --duration 30 --fail-on-loss
+sudo brr profile --event cycles -F 4999 --duration 30 --kernel-samples --fail-on-loss
+```
+
+The normal profile counts samples whose current IP is in BPF JIT code.
+`--kernel-samples` also captures callchains and attributes time in kernel
+helpers back to the BPF source line that called them. When comparing with
+`perf`, match brr's kernel-only event scope (`cycles:k` or `cpu-clock:k`) and
+compare simultaneous captures or repeated averages; adjacent sampling windows
+can differ even under steady I/O. See
+[Correctness validation against perf](docs/perf-correctness-validation.md) for
+the methodology and measured results.
+
 List perf events that `brr` can open on the current host:
 
 ```bash
