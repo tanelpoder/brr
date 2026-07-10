@@ -1,4 +1,6 @@
-Other than the **brr top** TUI, you can get regular tabular CLI output too (also, JSON/CSV).
+Other than the default **brr** TUI (also available as **brr top**), you can get
+regular tabular CLI output too, including JSON and CSV. Use **brr list** for the
+canonical loaded-program listing command.
 
 List top eBPF program runtime/overhead, program executions/s and avg program/probe run in nanoseconds:
 
@@ -89,7 +91,19 @@ CPU%    FILE        LINE  SOURCE
 ```
 The above profile only reports CPU samples falling into eBPF programs, but in reality, eBPF programs call separate helper functions that are part of the kernel and may even trigger other things like pagefault handlers etc (sleepable eBPF programs). The `--kernel-samples` option will act more like `perf record -g` option, walking up the stack callgraph of any kernel function and checking if its parent/ancestor caller is an eBPF program (if yes, account this sample).
 
-The `brr top` TUI will automatically capture kernel functions other than the eBPF programs and a little "+" will show up in front of eBPF code lines, if the CPU sample was executing a child function under it. You can expand/collapse it with "e" and "c", just like in the `perf` TUI.
+The `brr top` TUI automatically captures kernel functions beneath the selected
+eBPF program. A `+` in front of an eBPF code line indicates collapsed
+helper/kernel activity; use `e` and `c` to expand and collapse it. The compact
+header reports total sampled CPU (where 100% is one fully busy CPU) and splits
+it into displayed eBPF code, activity under eBPF, and unaccounted attribution.
+The `SAMPLES` and `%THIS` columns use non-overlapping leaves and total exactly
+100.00%; an explicit `Unaccounted` row explains samples omitted by source/JIT
+mapping or row limits.
+
+Textmode drilldowns show the full helper/kernel breakdown by default. Use
+`brr top --textmode --profile-top --collapse-samples` to fold child activity
+into its calling eBPF rows. Standalone `brr profile` reports remain fully
+detailed.
 
 ```
 $ sudo brr profile --kernel-samples

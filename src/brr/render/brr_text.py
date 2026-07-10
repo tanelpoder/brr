@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import PurePath
 
-from brr.inspection import BrrInspectReport, profile_status_message
+from brr.inspection import BrrInspectReport, profile_context_lines
 from brr.models import BpfHotspot, BpfKernelHotspot, BpfProfileMetadata, BpfProfileProgram
 from brr.render.text import _render_table
 from brr.reporter import BrrActivityItem, BrrActivityReport, BrrDetailReport, BrrSourceLine
@@ -33,7 +33,12 @@ def render_brr_detail(report: BrrDetailReport, *, extended: bool = False) -> str
     )
 
 
-def render_brr_inspect(report: BrrInspectReport, *, extended: bool = False) -> str:
+def render_brr_inspect(
+    report: BrrInspectReport,
+    *,
+    extended: bool = False,
+    collapse_samples: bool = False,
+) -> str:
     profiled = "yes" if report.profiled else "no"
     header = (
         f"BRR INSPECT program={report.program.id} name={report.program.name} "
@@ -41,23 +46,9 @@ def render_brr_inspect(report: BrrInspectReport, *, extended: bool = False) -> s
     )
     sections = [header]
     if report.profile is not None:
-        metadata = report.profile.metadata
-        has_mapped_source_samples = any(row.samples > 0 for row in report.rows)
-        sections.append(
-            "BRR INSPECT PROFILE "
-            f"duration={metadata.duration:g} event={metadata.selected_event} "
-            f"{_profile_sample_summary(metadata)}"
-        )
-        sections.append(
-            profile_status_message(
-                program_id=report.program.id,
-                profile=report.profile,
-                profile_program=report.profile_program,
-                has_mapped_source_samples=has_mapped_source_samples,
-            )
-        )
+        sections.extend(profile_context_lines(report))
     if report.rows:
-        sections.append(_render_table([_inspect_row(row) for row in report.rows]))
+        sections.append(_render_table(_inspect_rows(report, collapse_samples=collapse_samples)))
     else:
         sections.append("No source-line metadata or translated eBPF instructions available.")
     return "\n".join(sections)
@@ -195,10 +186,52 @@ def _file_name(file_name: str | None) -> str:
     return PurePath(file_name).name or file_name
 
 
-def _inspect_row(row) -> dict[str, str]:
+def _inspect_rows(
+    report: BrrInspectReport,
+    *,
+    collapse_samples: bool,
+) -> list[dict[str, str]]:
+    rendered: list[dict[str, str]] = []
+    children_by_key: dict[str, list[int]] = {}
+    for index, row in enumerate(report.rows):
+        if row.kind == "kernel" and row.child_key is not None:
+            children_by_key.setdefault(row.child_key, []).append(index)
+
+    for index, row in enumerate(report.rows):
+        if collapse_samples and row.kind == "kernel":
+            continue
+        samples = row.samples if row.attribution in {"direct", "under", "unaccounted"} else 0
+        basis_points = report.this_basis_points(index)
+        children_expanded = None
+        if collapse_samples and row.has_children and row.child_key is not None:
+            child_indexes = children_by_key.get(row.child_key, [])
+            samples += sum(report.rows[child_index].samples for child_index in child_indexes)
+            basis_points = (basis_points or 0) + sum(
+                report.this_basis_points(child_index) or 0 for child_index in child_indexes
+            )
+            children_expanded = False
+        rendered.append(
+            _inspect_row(
+                row,
+                samples=samples,
+                basis_points=basis_points,
+                children_expanded=children_expanded,
+            )
+        )
+    return rendered
+
+
+def _inspect_row(
+    row,
+    *,
+    samples: int,
+    basis_points: int | None,
+    children_expanded: bool | None,
+) -> dict[str, str]:
     return {
-        "WEIGHT": row.weight,
-        "CODE": row.display_code(),
+        "SAMPLES": str(samples) if samples > 0 else "",
+        "%THIS": f"{basis_points / 100:.2f}" if basis_points is not None else "",
+        "CODE": row.display_code(children_expanded=children_expanded),
     }
 
 

@@ -23,7 +23,8 @@ from brr.profiler import CallGraphMode
 from brr.reporter import BrrSourceLine, annotate_instruction_source_lines
 
 InspectMode = Literal["source", "mixed"]
-InspectRowKind = Literal["source", "instruction", "fold", "context", "kernel"]
+InspectRowKind = Literal["source", "instruction", "fold", "context", "kernel", "unaccounted"]
+InspectAttribution = Literal["none", "direct", "under", "aggregate", "unaccounted"]
 MANY_INSTRUCTIONS_MARKER_THRESHOLD = 8
 HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx")
 MARKER_DESCRIPTIONS: tuple[tuple[str, str], ...] = (
@@ -66,15 +67,22 @@ class BrrInspectRow:
     child_key: str | None = None
     has_children: bool = False
     children_expanded: bool = True
+    attribution: InspectAttribution = "none"
 
     @property
     def weight(self) -> str:
         return str(self.samples) if self.samples > 0 else ""
 
-    def display_code(self, *, show_markers: bool = True) -> str:
+    def display_code(
+        self,
+        *,
+        show_markers: bool = True,
+        children_expanded: bool | None = None,
+    ) -> str:
         prefix = ""
         if self.has_children:
-            prefix = "- " if self.children_expanded else "+ "
+            expanded = self.children_expanded if children_expanded is None else children_expanded
+            prefix = "- " if expanded else "+ "
         code = f"{prefix}{self.code}"
         if not show_markers or not self.markers:
             return code
@@ -90,9 +98,105 @@ class BrrInspectReport:
     profile_program: BpfProfileProgram | None = None
     instruction_source: str = "internal"
 
+    def __post_init__(self) -> None:
+        base_rows = [row for row in self.rows if row.attribution != "unaccounted"]
+        denominator = self.program_sample_denominator
+        if denominator is None or denominator <= 0:
+            if len(base_rows) != len(self.rows):
+                object.__setattr__(self, "rows", base_rows)
+            return
+        accounted = sum(row.samples for row in base_rows if _is_percent_leaf(row))
+        unaccounted = max(0, denominator - accounted)
+        if unaccounted > 0:
+            base_rows.append(
+                BrrInspectRow(
+                    kind="unaccounted",
+                    code=(
+                        "Unaccounted samples (not placed on a displayed row: "
+                        "source/JIT mapping or row limit)"
+                    ),
+                    samples=unaccounted,
+                    attribution="unaccounted",
+                )
+            )
+        object.__setattr__(self, "rows", base_rows)
+
     @property
     def profiled(self) -> bool:
         return self.profile is not None
+
+    @property
+    def program_sample_denominator(self) -> int | None:
+        """Inclusive selected-program samples used by inspect-view percentages."""
+        if self.profile is None:
+            return None
+        if self.profile_program is None:
+            return 0
+        return self.profile_program.inclusive_samples
+
+    def this_percent(self, row_index: int) -> str:
+        basis_points = self.this_basis_points(row_index)
+        if basis_points is None:
+            return ""
+        return f"{basis_points / 100:.2f}"
+
+    def this_basis_points(self, row_index: int) -> int | None:
+        if row_index < 0 or row_index >= len(self.rows):
+            return None
+        return self._this_basis_points().get(row_index)
+
+    def _this_basis_points(self) -> dict[int, int]:
+        denominator = self.program_sample_denominator
+        if denominator is None or denominator <= 0:
+            return {}
+        weighted = [
+            (index, row.samples)
+            for index, row in enumerate(self.rows)
+            if _is_percent_leaf(row) and row.samples > 0
+        ]
+        if not weighted:
+            return {}
+        total = sum(samples for _index, samples in weighted)
+        if total != denominator:
+            return {index: round(samples / denominator * 10_000) for index, samples in weighted}
+        return _allocate_integer_units(weighted, total_count=denominator, total_units=10_000)
+
+    @property
+    def attribution_samples(self) -> tuple[int, int, int]:
+        direct = sum(
+            row.samples for row in self.rows if row.attribution == "direct" and row.samples > 0
+        )
+        under = sum(
+            row.samples for row in self.rows if row.attribution == "under" and row.samples > 0
+        )
+        unaccounted = sum(
+            row.samples for row in self.rows if row.attribution == "unaccounted" and row.samples > 0
+        )
+        return direct, under, unaccounted
+
+
+def _is_percent_leaf(row: BrrInspectRow) -> bool:
+    return row.attribution in {"direct", "under", "unaccounted"}
+
+
+def _allocate_integer_units(
+    weighted: list[tuple[int, int]],
+    *,
+    total_count: int,
+    total_units: int,
+) -> dict[int, int]:
+    if total_count <= 0 or total_units <= 0:
+        return {index: 0 for index, _count in weighted}
+    allocated = {index: count * total_units // total_count for index, count in weighted}
+    remainder_order = sorted(
+        weighted,
+        key=lambda item: (-(item[1] * total_units % total_count), item[0]),
+    )
+    remaining = total_units - sum(allocated.values())
+    for offset in range(remaining):
+        index, _count = remainder_order[offset % len(remainder_order)]
+        allocated[index] += 1
+    return allocated
 
 
 def with_inspect_marker(row: BrrInspectRow, marker: str) -> BrrInspectRow:
@@ -113,72 +217,43 @@ def with_inspect_marker(row: BrrInspectRow, marker: str) -> BrrInspectRow:
         child_key=row.child_key,
         has_children=row.has_children,
         children_expanded=row.children_expanded,
+        attribution=row.attribution,
     )
 
 
-def profile_status_message(
-    *,
-    program_id: int,
-    profile: BpfProfile,
-    profile_program: BpfProfileProgram | None,
-    has_mapped_source_samples: bool,
-) -> str:
-    metadata = profile.metadata
-    selected_samples = (
-        metadata.selected_program_samples
-        if metadata.selected_program_samples > 0 or profile_program is None
-        else profile_program.samples
+def profile_context_lines(report: BrrInspectReport) -> tuple[str, ...]:
+    profile = report.profile
+    program = report.profile_program
+    if profile is None:
+        return ()
+    warnings = list(profile.metadata.warnings)
+    if profile.metadata.incomplete and not warnings:
+        warnings.append("profile capture is incomplete")
+    if program is None or program.inclusive_samples <= 0:
+        summary = "CPU: 0.0000% total; no samples attributed to this program (100% = one CPU)"
+        return (summary, *(f"Warning: {warning}" for warning in warnings))
+
+    direct_samples, under_samples, unaccounted_samples = report.attribution_samples
+    total_samples = program.inclusive_samples
+    total_cpu = program.inclusive_cpu_percent
+    cpu_units = _allocate_integer_units(
+        [(0, direct_samples), (1, under_samples), (2, unaccounted_samples)],
+        total_count=total_samples,
+        total_units=round(total_cpu * 10_000),
     )
-    selected_kernel_samples = profile_program.kernel_samples if profile_program is not None else 0
-    selected_inclusive_samples = (
-        profile_program.inclusive_samples
-        if profile_program is not None
-        else selected_samples + selected_kernel_samples
+    direct_cpu = cpu_units[0] / 10_000
+    under_cpu = cpu_units[1] / 10_000
+    unaccounted_cpu = cpu_units[2] / 10_000
+    summary = (
+        f"CPU: {total_cpu:.4f}% total = {direct_cpu:.4f}% eBPF + "
+        f"{under_cpu:.4f}% under eBPF + {unaccounted_cpu:.4f}% unaccounted "
+        "(100% = one CPU)"
     )
-    outside_bpf_samples = (
-        metadata.non_bpf_samples if metadata.non_bpf_samples > 0 else metadata.unresolved_samples
-    )
-    source_mapped_samples = (
-        metadata.source_mapped_samples
-        if metadata.source_mapped_samples > 0 or not has_mapped_source_samples
-        else selected_samples
-    )
-    base = (
-        f"profiled {program_id}: event={metadata.selected_event} "
-        f"total_samples={metadata.total_samples} "
-        f"lost={metadata.lost_samples} "
-        f"buffer={metadata.perf_buffer_pages_per_cpu}pages/cpu "
-        f"occupancy={metadata.perf_max_ring_occupancy_percent:.1f}% "
-        f"running={metadata.perf_running_percent:.2f}%; "
-        f"selected program samples={selected_samples}; "
-        f"attributed kernel/helper samples={selected_kernel_samples}; "
-        f"other BPF program samples={metadata.other_bpf_samples}; "
-        f"outside BPF samples={outside_bpf_samples}"
-    )
-    if selected_inclusive_samples == 0:
-        return _with_profile_warnings(
-            f"{base}; no samples captured in selected program",
-            metadata.warnings,
-        )
-    if source_mapped_samples:
-        message = f"{base}; source mapped={source_mapped_samples}"
-        if metadata.source_unmapped_samples:
-            message = f"{message}; source unmapped={metadata.source_unmapped_samples}"
-        return _with_profile_warnings(
-            f"{message}; source annotations use inclusive selected program samples",
-            metadata.warnings,
-        )
-    return _with_profile_warnings(
-        f"{base}; selected program samples had no source-line mapping; "
-        "source annotations use inclusive selected program samples",
-        metadata.warnings,
-    )
+    return (summary, *(f"Warning: {warning}" for warning in warnings))
 
 
-def _with_profile_warnings(message: str, warnings: tuple[str, ...]) -> str:
-    if not warnings:
-        return message
-    return f"{message}; Warning: {'; '.join(warnings)}"
+def profile_status_message(report: BrrInspectReport) -> str:
+    return "\n".join(profile_context_lines(report))
 
 
 BpftoolProvider = Callable[[int], list[BpftoolInstruction]]
@@ -247,12 +322,11 @@ def build_inspect_report(
     bpftool_provider: BpftoolProvider | None = None,
 ) -> BrrInspectReport:
     kernel_hotspots = kernel_hotspots or []
-    inclusive_hotspots = [*hotspots, *_bpf_hotspots_from_kernel_hotspots(kernel_hotspots)]
     kernel_children = _kernel_children_by_source(kernel_hotspots)
     source_lines = annotate_instruction_source_lines(
         dump.program.id,
         dump.instructions,
-        hotspots=inclusive_hotspots,
+        hotspots=hotspots,
     )
     source_markers = _source_markers(dump.instructions, source_lines)
     if mode == "source":
@@ -332,24 +406,6 @@ def profile_metadata_for_empty(
     )
 
 
-def _bpf_hotspots_from_kernel_hotspots(
-    kernel_hotspots: list[BpfKernelHotspot],
-) -> list[BpfHotspot]:
-    return [
-        BpfHotspot(
-            samples=hotspot.samples,
-            sample_percent=hotspot.sample_percent,
-            cpu_percent=hotspot.cpu_percent,
-            jited_address=hotspot.bpf_jited_address,
-            file_name=hotspot.bpf_file_name,
-            line_number=hotspot.bpf_line_number,
-            column=hotspot.bpf_column,
-            source=hotspot.bpf_source,
-        )
-        for hotspot in kernel_hotspots
-    ]
-
-
 def _kernel_children_by_source(
     kernel_hotspots: list[BpfKernelHotspot],
 ) -> dict[tuple[str | None, int | None, str | None], list[BrrInspectRow]]:
@@ -368,6 +424,7 @@ def _kernel_children_by_source(
                 column=hotspot.bpf_column,
                 offset=None,
                 child_key=_child_key(key),
+                attribution="under",
             )
         )
     return children
@@ -408,6 +465,7 @@ def _source_rows(
                     child_key=_child_key(key) if child_rows else None,
                     has_children=bool(child_rows),
                     children_expanded=True,
+                    attribution="direct",
                 )
             )
             rows.extend(child_rows)
@@ -461,6 +519,7 @@ def _mixed_rows(
                         child_key=_child_key(source_key) if child_rows else None,
                         has_children=bool(child_rows),
                         children_expanded=True,
+                        attribution="aggregate",
                     )
                 )
                 rows.extend(child_rows)
@@ -504,6 +563,7 @@ def _instruction_row(
         column=source.column if source is not None else None,
         offset=instruction.offset,
         markers=("unmapped",) if source is None else (),
+        attribution="direct",
     )
 
 

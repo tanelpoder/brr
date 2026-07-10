@@ -3,9 +3,10 @@
 `brr` is the eBPF Runtime Reporter: a compact CLI and Textual TUI for listing,
 inspecting, and profiling loaded Linux eBPF objects.
 
-It is meant to feel like `ps` and `top` for eBPF. The default command prints one
-loaded eBPF program per row; subcommands show maps, links, BTF objects, runtime
-deltas, translated instructions, source metadata, and BPF JIT CPU samples.
+It is meant to feel like `ps` and `top` for eBPF. The default command opens the
+live top-style TUI; `brr list` prints one loaded eBPF program per row, and other
+subcommands show maps, links, BTF objects, runtime deltas, translated
+instructions, source metadata, and BPF JIT CPU samples.
 
 `brr` talks to the kernel directly through `bpf()` and `perf_event_open`. It
 does not shell out to `perf`.
@@ -38,7 +39,7 @@ does not shell out to `perf`.
 
 ## Output
 
-Default program listing:
+Program listing (`brr list`):
 
 ```text
 ID  TYPE       NAME          XLATED_BYTES  JITED_BYTES
@@ -62,7 +63,7 @@ runtime metrics.
 JSON and CSV output are available for scripting:
 
 ```bash
-sudo brr --json --pretty
+sudo brr list --json --pretty
 sudo brr --csv map
 ```
 
@@ -91,13 +92,13 @@ sudo env PATH="$PATH" brr
 Download the DEB for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo dpkg -i brr_0.4.1-1_amd64.deb
+sudo dpkg -i brr_0.5.0-1_amd64.deb
 ```
 
 On ARM64:
 
 ```bash
-sudo dpkg -i brr_0.4.1-1_arm64.deb
+sudo dpkg -i brr_0.5.0-1_arm64.deb
 ```
 
 ### Fedora, RHEL, or compatible RPM systems
@@ -105,13 +106,13 @@ sudo dpkg -i brr_0.4.1-1_arm64.deb
 Download the RPM for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo rpm -Uvh brr-0.4.1-1.x86_64.rpm
+sudo rpm -Uvh brr-0.5.0-1.x86_64.rpm
 ```
 
 On AArch64:
 
 ```bash
-sudo rpm -Uvh brr-0.4.1-1.aarch64.rpm
+sudo rpm -Uvh brr-0.5.0-1.aarch64.rpm
 ```
 
 The packaged command installs as `/usr/bin/brr` and contains a standalone
@@ -125,10 +126,11 @@ open BPF objects and CPU-wide perf events.
 List loaded eBPF programs:
 
 ```bash
-sudo brr
-sudo brr prog
-sudo brr -x
+sudo brr list
+sudo brr list -x
 ```
+
+`brr prog` remains available as a backward-compatible alias for `brr list`.
 
 List other object types:
 
@@ -141,7 +143,7 @@ sudo brr btf
 Include runtime counters in the program list:
 
 ```bash
-sudo brr prog --stats
+sudo brr list --stats
 ```
 
 Show runtime deltas:
@@ -155,12 +157,18 @@ sudo brr activity -c --duration 2
 Open the interactive top-style TUI:
 
 ```bash
+sudo brr
 sudo brr top
 sudo brr top -x
 sudo brr top -c
 ```
 
-Inside `brr top`, press `x` to toggle extended columns and `c` to toggle
+Bare `brr` opens the same TUI as `brr top`; root `--bpffs`, `-x`, and `-c`
+options apply to that default view. Use the explicit `top` command for options
+such as `--delay`, `--event`, and `--textmode`. Bare `--json`, `--csv`, and
+`--pretty` are rejected; use a subcommand such as `brr list --json`.
+
+Inside the TUI, press `x` to toggle extended columns and `c` to toggle
 cumulative columns. The live table re-enumerates loaded programs after every
 completed sampling window, so newly loaded programs appear without restarting
 `brr`. Refresh is intentionally paused while a program inspect/profile view is
@@ -171,6 +179,9 @@ Inspect a program by ID:
 ```bash
 sudo brr dump 48
 sudo brr top --program-id 48
+sudo brr top --textmode --profile-top --program-id 48 --kernel-samples
+sudo brr top --textmode --profile-top --program-id 48 --kernel-samples \
+    --collapse-samples
 ```
 
 Profile BPF JIT CPU samples:
@@ -196,6 +207,25 @@ time, kernel loss/throttle records, parser discards, and warnings. With
 `--fail-on-loss`, an incomplete CLI or `top --textmode` profile is still printed
 but the command exits with status 1. JSON and CSV include the same capture
 telemetry for automation.
+
+Profiled inspect drilldowns label row counts as `SAMPLES` and show `%THIS`, the
+row's contribution to this selected program's inclusive sampled total. Source,
+instruction, and helper/kernel percentages are non-overlapping and add to
+exactly 100.00%. Samples that cannot be placed on a displayed row because of
+source/JIT mapping or row limits appear in an explicit `Unaccounted` row.
+
+The compact drilldown header reports the program's total sampled CPU split into
+displayed eBPF code, activity under eBPF in helpers or other kernel functions,
+and unaccounted attribution. Here, 100% means one fully busy CPU, so totals may
+exceed 100% on multicore systems. Normal capture telemetry is omitted from this
+header; loss, multiplexing, and other capture problems still appear as
+warnings. Standalone `brr profile` output and its JSON/CSV capture telemetry
+remain detailed.
+
+`top --textmode` expands helper/kernel children by default. Add
+`--collapse-samples` to fold those children into their calling eBPF rows while
+retaining the same 100.00% total. The option requires both `--textmode` and
+`--profile-top`.
 
 Very short BPF programs may receive only a handful of samples at 997 Hz,
 especially with `cpu-clock`. For stable program and source-line rankings, use a
@@ -241,9 +271,9 @@ uv run --group package python scripts/build_release.py --all
 
 Artifacts are written to `dist/release/`:
 
-- `brr-0.4.1-linux-<arch>`
-- `brr_0.4.1-1_<deb-arch>.deb`
-- `brr-0.4.1-1.<rpm-arch>.rpm`
+- `brr-0.5.0-linux-<arch>`
+- `brr_0.5.0-1_<deb-arch>.deb`
+- `brr-0.5.0-1.<rpm-arch>.rpm`
 - `SHA256SUMS`
 
 ## Notes

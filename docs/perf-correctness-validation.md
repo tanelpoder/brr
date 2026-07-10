@@ -58,6 +58,21 @@ sudo kill -INT "$biolatency_pid"
 rm -f /nvme/brr-validation.dat
 ```
 
+For repeated brr testing, the repository includes a wrapper for the same fio
+and biolatency workload. Its first argument sets the number of fio process jobs
+and its second sets the runtime in seconds:
+
+```bash
+./run_fio_and_biolatency.sh 8 300
+```
+
+The script prepares `/nvme/brr-validation.dat` at 8 GiB when it does not yet
+exist, retains it for subsequent runs, and writes `fio.txt` and
+`biolatency.txt` in the current directory. `FIO_FILE`, `FIO_SIZE`, `FIO_LOG`,
+and `BIOLATENCY_LOG` may be set to override those paths or the preparation
+size. It authenticates with sudo before starting biolatency in the background
+and stops both workloads if the script is interrupted.
+
 For helper attribution, add `--kernel-samples --call-graph fp` to brr and
 `-g --call-graph fp` to `perf record`.
 

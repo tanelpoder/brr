@@ -53,7 +53,7 @@ def package_version() -> str:
     try:
         return version("brr")
     except PackageNotFoundError:
-        return "0.4.1"
+        return "0.5.0"
 
 
 def _positive_float(value: str) -> float:
@@ -114,6 +114,13 @@ def _validate_call_graph_args(parser: argparse.ArgumentParser, args: argparse.Na
     kernel_samples = getattr(args, "kernel_samples", False)
     if call_graph == "lbr" and not kernel_samples:
         parser.error("--call-graph lbr requires --kernel-samples")
+
+
+def _validate_top_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    if not getattr(args, "collapse_samples", False):
+        return
+    if not getattr(args, "textmode", False) or not getattr(args, "profile_top", False):
+        parser.error("--collapse-samples requires --textmode and --profile-top")
 
 
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
@@ -229,17 +236,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Emit machine-readable JSON instead of text.",
+        help="Emit machine-readable JSON for the following subcommand.",
     )
     parser.add_argument(
         "--csv",
         action="store_true",
-        help="Emit machine-readable CSV instead of text.",
+        help="Emit machine-readable CSV for the following subcommand.",
     )
     parser.add_argument(
         "--pretty",
         action="store_true",
-        help="Pretty-print JSON output. Requires --json.",
+        help="Pretty-print subcommand JSON output. Requires --json.",
     )
     parser.add_argument(
         "-x",
@@ -262,10 +269,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="object_type")
 
-    prog_parser = subparsers.add_parser("prog", help="List loaded eBPF programs.")
-    _add_output_options(prog_parser)
-    _add_extended_option(prog_parser)
-    prog_parser.add_argument(
+    list_parser = subparsers.add_parser(
+        "list",
+        aliases=["prog"],
+        help="List loaded eBPF programs (alias: prog).",
+    )
+    list_parser.set_defaults(object_type="list")
+    _add_output_options(list_parser)
+    _add_extended_option(list_parser)
+    list_parser.add_argument(
         "--stats",
         action="store_true",
         help="Enable runtime execution statistics while collecting program info.",
@@ -417,6 +429,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.object_type is None:
+        if args.json or args.csv or args.pretty:
+            parser.error(
+                "--json, --csv, and --pretty require a subcommand; "
+                "use 'brr list --json' to list programs"
+            )
+        default_top_args = parser.parse_args(["top"])
+        default_top_args.bpffs = args.bpffs
+        default_top_args.extended = args.extended
+        default_top_args.cumulative = args.cumulative
+        args = default_top_args
     if args.json and args.csv:
         parser.error("--json and --csv are mutually exclusive")
     if args.pretty and args.csv:
@@ -424,13 +447,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.pretty and not args.json:
         parser.error("--pretty requires --json")
     _validate_call_graph_args(parser, args)
+    _validate_top_args(parser, args)
 
     service = build_snapshot_service(args.bpffs)
 
     try:
-        object_type = args.object_type or "prog"
+        object_type = args.object_type
         with_stats = getattr(args, "stats", False)
-        if object_type == "prog":
+        if object_type == "list":
             programs = service.collect_programs(with_stats=with_stats)
             if args.json:
                 print(render_programs_json(programs, pretty=args.pretty))

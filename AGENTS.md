@@ -73,6 +73,27 @@ sudo env PATH="$PATH" uv run brr top --textmode --delay 1
 sudo env PATH="$PATH" uv run brr perf-events
 ```
 
+For interactive TUI smoke tests, a detached `tmux` session plus
+`tmux capture-pane -p` provides a clean snapshot of the rendered screen without
+the raw ANSI redraw stream produced by a PTY. Fixing the window size is also
+useful for checking narrow-terminal wrapping and clipping:
+
+```bash
+tmux new-session -d -s brr-smoke -x 80 -y 24 \
+  'sudo env PATH="$PATH" uv run brr'
+tmux capture-pane -p -t brr-smoke
+tmux send-keys -t brr-smoke Enter
+tmux capture-pane -p -t brr-smoke
+tmux send-keys -t brr-smoke p
+tmux capture-pane -p -t brr-smoke
+tmux send-keys -t brr-smoke C-q
+tmux kill-session -t brr-smoke 2>/dev/null || true
+```
+
+Send keys only after the relevant table or modal has loaded, and capture again
+after asynchronous profiling or inspection work completes. This is a manual
+live check, not a replacement for deterministic headless Textual tests.
+
 Do not make a live/root check the only verification for logic that can be
 covered with deterministic inputs.
 

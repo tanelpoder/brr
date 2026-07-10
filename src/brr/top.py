@@ -97,8 +97,15 @@ def _hottest_inspect_row(report: BrrInspectReport) -> int | None:
     for index, row in enumerate(report.rows):
         if row.kind != "source":
             continue
-        if row.samples > hottest_samples:
-            hottest_samples = row.samples
+        samples = row.samples
+        if row.child_key is not None:
+            samples += sum(
+                child.samples
+                for child in report.rows
+                if child.kind == "kernel" and child.child_key == row.child_key
+            )
+        if samples > hottest_samples:
+            hottest_samples = samples
             hottest_index = index
     return hottest_index
 
@@ -149,7 +156,11 @@ def _fold_ranges_for_rows(
 ) -> list[InspectFoldRange]:
     if viewport_rows <= 0 or len(rows) <= viewport_rows:
         return []
-    hot_indexes = [index for index, row in enumerate(rows) if row.kind == "source" and row.samples]
+    hot_indexes = [
+        index
+        for index, row in enumerate(rows)
+        if row.kind in {"source", "kernel", "unaccounted"} and row.samples
+    ]
     if not hot_indexes:
         return []
 
@@ -374,6 +385,7 @@ class BrrConfig:
     perf_buffer_pages: int | None = None
     perf_drain_ms: int | None = None
     fail_on_loss: bool = False
+    collapse_samples: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -494,6 +506,14 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
         help="In textmode, append a profile/source drill-down for the top activity row.",
     )
     parser.add_argument(
+        "--collapse-samples",
+        action="store_true",
+        help=(
+            "In a profiled textmode drill-down, fold helper/kernel samples into "
+            "their calling eBPF row."
+        ),
+    )
+    parser.add_argument(
         "-x",
         "--extended",
         action="store_true",
@@ -593,6 +613,7 @@ def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
         perf_buffer_pages=args.perf_buffer_pages,
         perf_drain_ms=args.perf_drain_ms,
         fail_on_loss=args.fail_on_loss,
+        collapse_samples=args.collapse_samples,
     )
 
 
@@ -675,7 +696,13 @@ def render_textmode_result(
                 profile_program=inspect.profile_program,
                 instruction_source=inspect.instruction_source,
             )
-        sections.append(render_brr_inspect(inspect, extended=config.extended))
+        sections.append(
+            render_brr_inspect(
+                inspect,
+                extended=config.extended,
+                collapse_samples=config.collapse_samples,
+            )
+        )
         incomplete = bool(inspect.profile and inspect.profile.metadata.incomplete)
     elif profile_top:
         sections.append("BRR PROFILE program=-\nNo program selected for profiling.")
@@ -782,9 +809,12 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             display: none;
         }
 
-        #inspect-title,
-        #inspect-status {
+        #inspect-title {
             height: 1;
+        }
+
+        #inspect-status {
+            height: auto;
         }
 
         #inspect-table {
@@ -979,7 +1009,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             inspect_table.cursor_type = "row"
             inspect_table.show_row_labels = False
             inspect_table.zebra_stripes = True
-            inspect_table.add_columns("WEIGHT", "CODE")
+            inspect_table.add_columns("SAMPLES", "%THIS", "CODE")
             marker_table = self.query_one("#marker-legend-table", DataTable)
             marker_table.cursor_type = "row"
             marker_table.show_row_labels = False
@@ -1060,39 +1090,18 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             program_id = _selected_activity_id(self.activity_ids, table.cursor_row)
             if program_id is None:
                 return
+            self._reset_inspect_state()
             token = self._next_worker_token()
             self.inspect_token = token
             self.inspect_open = True
             self.inspect_loading = True
-            self.profile_options_open = False
-            self.inspect_dump = None
-            self.inspect_mode = "source"
-            self.inspect_profile = None
-            self.inspect_profile_program = None
-            self.inspect_hotspots = []
-            self.inspect_kernel_hotspots = []
-            self.inspect_report = None
-            self.inspect_fold_ranges = []
-            self.inspect_expanded_fold_ids = set()
-            self.inspect_expanded_child_keys = set()
-            self.inspect_visible_full_indexes = []
-            self.inspect_visible_fold_ids = []
-            self.inspect_search_open = False
-            self.inspect_search_focused = False
-            self.inspect_search_query = ""
-            self.inspect_status_message = None
-            self.inspect_markers_visible = False
-            self.inspect_marker_legend_open = False
-            self._set_profile_options_visible(False)
-            self._set_search_visible(False)
-            self._set_marker_legend_visible(False)
             self._show_inspect_modal()
             self.refresh_bindings()
             self.query_one("#status", Static).update(
                 "Top refresh paused while inspecting; Esc returns to live view."
             )
             self.query_one("#inspect-title", Static).update(f"loading program {program_id}...")
-            self.query_one("#inspect-status", Static).update("Loading source and instructions...")
+            self.query_one("#inspect-status", Static).update("")
 
             def work() -> InspectLoadResult:
                 with self.service_lock:
@@ -1150,15 +1159,47 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
             if self.inspect_open:
                 self.inspect_open = False
-                self.inspect_loading = False
-                self.profile_running = False
-                self.inspect_marker_legend_open = False
-                self._set_marker_legend_visible(False)
+                self._reset_inspect_state()
                 self.query_one("#inspect-modal", Vertical).display = False
                 self.query_one("#inspect-modal", Vertical).trap_focus(False)
                 self.query_one("#activity", DataTable).focus()
                 self.refresh_bindings()
                 self.action_refresh()
+
+        def _reset_inspect_state(self) -> None:
+            """Clear the modal and invalidate every inspect-related worker generation."""
+            self.inspect_token = self._next_worker_token()
+            self.render_token = self._next_worker_token()
+            self.profile_token = self._next_worker_token()
+            self.inspect_loading = False
+            self.profile_running = False
+            self.profile_options_open = False
+            self.inspect_dump = None
+            self.inspect_mode = "source"
+            self.inspect_profile = None
+            self.inspect_profile_program = None
+            self.inspect_hotspots = []
+            self.inspect_kernel_hotspots = []
+            self.inspect_report = None
+            self.inspect_fold_ranges = []
+            self.inspect_expanded_fold_ids = set()
+            self.inspect_expanded_child_keys = set()
+            self.inspect_visible_full_indexes = []
+            self.inspect_visible_fold_ids = []
+            self.inspect_search_open = False
+            self.inspect_search_focused = False
+            self.inspect_search_query = ""
+            self.inspect_status_message = None
+            self.inspect_markers_visible = False
+            self.inspect_marker_legend_open = False
+            self._set_profile_options_visible(False)
+            search = self.query_one("#inspect-search", Input)
+            search.value = ""
+            self._set_search_visible(False)
+            self._set_marker_legend_visible(False)
+            self.query_one("#inspect-title", Static).update("")
+            self.query_one("#inspect-status", Static).update("")
+            self.query_one("#inspect-table", DataTable).clear()
 
         def action_toggle_pause_or_inspect_mode(self) -> None:
             if not self.inspect_open:
@@ -1598,39 +1639,56 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             if self.inspect_profile is None:
                 status.update(self._inspect_help_text())
             else:
-                self.inspect_status_message = profile_status_message(
-                    program_id=self.inspect_report.program.id,
-                    profile=self.inspect_profile,
-                    profile_program=self.inspect_profile_program,
-                    has_mapped_source_samples=_hottest_inspect_row(self.inspect_report) is not None,
-                )
-                if target_row is not None:
-                    self.inspect_status_message = (
-                        f"{self.inspect_status_message}; jumped to hottest line"
-                    )
+                self.inspect_status_message = profile_status_message(self.inspect_report)
                 status.update(self.inspect_status_message)
             visible = self._visible_inspect_rows(table)
             self.refresh_bindings()
             table.clear()
+            children_by_key: dict[str, list[int]] = {}
+            for full_index, full_row in enumerate(self.inspect_report.rows):
+                if full_row.kind == "kernel" and full_row.child_key is not None:
+                    children_by_key.setdefault(full_row.child_key, []).append(full_index)
             for index, row in enumerate(visible.rows):
                 if row.kind == "fold":
                     table.add_row(
+                        "",
                         "",
                         Text(row.code, style="dim"),
                         key=f"fold:{visible.fold_ids[index]}",
                     )
                 else:
+                    full_index = visible.full_indexes[index]
+                    samples = (
+                        row.samples if row.attribution in {"direct", "under", "unaccounted"} else 0
+                    )
+                    basis_points = (
+                        self.inspect_report.this_basis_points(full_index)
+                        if full_index is not None
+                        else None
+                    )
+                    child_expanded = (
+                        row.child_key in self.inspect_expanded_child_keys
+                        if row.has_children and row.child_key is not None
+                        else None
+                    )
+                    if row.child_key is not None and child_expanded is False:
+                        child_indexes = children_by_key.get(row.child_key, [])
+                        samples += sum(
+                            self.inspect_report.rows[child_index].samples
+                            for child_index in child_indexes
+                        )
+                        basis_points = (basis_points or 0) + sum(
+                            self.inspect_report.this_basis_points(child_index) or 0
+                            for child_index in child_indexes
+                        )
                     table.add_row(
-                        row.weight,
+                        str(samples) if samples > 0 else "",
+                        f"{basis_points / 100:.2f}" if basis_points is not None else "",
                         _inspect_code_cell(
                             row,
                             show_markers=self.inspect_markers_visible,
                             search_query=self.inspect_search_query,
-                            child_expanded=(
-                                row.child_key in self.inspect_expanded_child_keys
-                                if row.has_children and row.child_key is not None
-                                else None
-                            ),
+                            child_expanded=child_expanded,
                         ),
                     )
             visible_target_row = self._visible_target_row(
@@ -2016,9 +2074,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
 
             if role == "inspect-load":
-                self.inspect_loading = False
                 if token != self.inspect_token or not self.inspect_open:
                     return
+                self.inspect_loading = False
                 if isinstance(result, InspectLoadResult):
                     self.inspect_dump = result.dump
                     self.inspect_report = result.report
@@ -2026,9 +2084,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
 
             if role == "inspect-render":
-                self.inspect_loading = False
                 if token != self.render_token or not self.inspect_open:
                     return
+                self.inspect_loading = False
                 if isinstance(result, InspectRenderResult):
                     self.inspect_report = result.report
                     self._render_inspect(
@@ -2039,9 +2097,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
 
             if role == "profile":
-                self.profile_running = False
                 if token != self.profile_token or not self.inspect_open:
                     return
+                self.profile_running = False
                 if isinstance(result, ProfileResult):
                     self.inspect_profile = result.profile
                     self.inspect_profile_program = result.profile_program
@@ -2064,18 +2122,21 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 if token == self.activity_token:
                     self.query_one("#status", Static).update(message)
             elif role in {"inspect-load", "inspect-render"}:
-                self.inspect_loading = False
-                if self.inspect_open:
+                current_token = self.inspect_token if role == "inspect-load" else self.render_token
+                if token == current_token and self.inspect_open:
+                    self.inspect_loading = False
                     self.query_one("#inspect-status", Static).update(message)
             elif role == "profile":
-                self.profile_running = False
                 if token == self.profile_token and self.inspect_open:
+                    self.profile_running = False
                     self.query_one("#inspect-status", Static).update(message)
 
         def _handle_worker_cancelled(self, role: str, token: int) -> None:
             if role == "activity" and token == self.activity_token:
                 self.activity_refreshing = False
-            elif role in {"inspect-load", "inspect-render"}:
+            elif role == "inspect-load" and token == self.inspect_token and self.inspect_open:
+                self.inspect_loading = False
+            elif role == "inspect-render" and token == self.render_token and self.inspect_open:
                 self.inspect_loading = False
             elif role == "profile" and token == self.profile_token:
                 self.profile_running = False
