@@ -995,6 +995,13 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 return
             self.action_refresh()
 
+        def _continue_activity_refresh(self) -> None:
+            if self.refresh_paused or self.delay_options_open or self.inspect_open:
+                return
+            # The worker already spends self.delay seconds measuring. Chain the next
+            # window now so the periodic fallback timer does not add an unmeasured gap.
+            self.action_refresh()
+
         def _restart_refresh_timer(self) -> None:
             if self.refresh_timer is not None:
                 self.refresh_timer.stop()
@@ -2005,6 +2012,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     return
                 if isinstance(result, ActivityRefreshResult):
                     self._update_activity(result)
+                    self._continue_activity_refresh()
                 return
 
             if role == "inspect-load":

@@ -161,7 +161,10 @@ sudo brr top -c
 ```
 
 Inside `brr top`, press `x` to toggle extended columns and `c` to toggle
-cumulative columns.
+cumulative columns. The live table re-enumerates loaded programs after every
+completed sampling window, so newly loaded programs appear without restarting
+`brr`. Refresh is intentionally paused while a program inspect/profile view is
+open; press `Esc` to return to the live table.
 
 Inspect a program by ID:
 
