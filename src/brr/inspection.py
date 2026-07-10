@@ -23,7 +23,9 @@ from brr.profiler import CallGraphMode
 from brr.reporter import BrrSourceLine, annotate_instruction_source_lines
 
 InspectMode = Literal["source", "mixed"]
-InspectRowKind = Literal["source", "instruction", "fold", "context", "kernel", "unaccounted"]
+InspectRowKind = Literal[
+    "source", "instruction", "fold", "context", "kernel", "summary", "unaccounted"
+]
 InspectAttribution = Literal["none", "direct", "under", "aggregate", "unaccounted"]
 MANY_INSTRUCTIONS_MARKER_THRESHOLD = 8
 HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx")
@@ -97,28 +99,20 @@ class BrrInspectReport:
     profile: BpfProfile | None = None
     profile_program: BpfProfileProgram | None = None
     instruction_source: str = "internal"
+    source_limit: int | None = None
+    source_limit_omitted_direct_samples: int = 0
+    source_limit_omitted_under_bpf_samples: int = 0
 
     def __post_init__(self) -> None:
-        base_rows = [row for row in self.rows if row.attribution != "unaccounted"]
+        base_rows = [
+            row for row in self.rows if row.kind != "summary" and row.attribution != "unaccounted"
+        ]
         denominator = self.program_sample_denominator
         if denominator is None or denominator <= 0:
             if len(base_rows) != len(self.rows):
                 object.__setattr__(self, "rows", base_rows)
             return
-        accounted = sum(row.samples for row in base_rows if _is_percent_leaf(row))
-        unaccounted = max(0, denominator - accounted)
-        if unaccounted > 0:
-            base_rows.append(
-                BrrInspectRow(
-                    kind="unaccounted",
-                    code=(
-                        "Unaccounted samples (not placed on a displayed row: "
-                        "source/JIT mapping or row limit)"
-                    ),
-                    samples=unaccounted,
-                    attribution="unaccounted",
-                )
-            )
+        base_rows.extend(_attribution_summary_rows(self, base_rows))
         object.__setattr__(self, "rows", base_rows)
 
     @property
@@ -179,6 +173,182 @@ def _is_percent_leaf(row: BrrInspectRow) -> bool:
     return row.attribution in {"direct", "under", "unaccounted"}
 
 
+def _attribution_summary_rows(
+    report: BrrInspectReport,
+    detail_rows: list[BrrInspectRow],
+) -> list[BrrInspectRow]:
+    program = report.profile_program
+    if program is None:
+        return []
+    summaries: list[BrrInspectRow] = []
+    direct_remaining = max(
+        0,
+        program.samples - sum(row.samples for row in detail_rows if row.attribution == "direct"),
+    )
+    under_remaining = max(
+        0,
+        program.kernel_samples
+        - sum(row.samples for row in detail_rows if row.attribution == "under"),
+    )
+
+    direct_unmapped = min(direct_remaining, program.direct_source_unmapped_samples)
+    direct_remaining -= direct_unmapped
+    _append_summary(
+        summaries,
+        samples=direct_unmapped,
+        attribution="direct",
+        code="eBPF samples without BTF/JIT source metadata",
+    )
+    retained_direct_unmapped = sum(
+        hotspot.samples for hotspot in program.hotspots if hotspot.instruction_offset is None
+    )
+    omitted_direct_unmapped = max(
+        0, program.direct_source_unmapped_samples - retained_direct_unmapped
+    )
+    direct_limited = max(
+        0,
+        program.direct_hotspot_samples_omitted_by_limit
+        - min(
+            program.direct_hotspot_samples_omitted_by_limit,
+            omitted_direct_unmapped,
+        ),
+    )
+    direct_limited = min(direct_remaining, direct_limited)
+    direct_remaining -= direct_limited
+    _append_summary(
+        summaries,
+        samples=direct_limited,
+        attribution="direct",
+        code=_limit_summary("Other eBPF samples not shown", report),
+    )
+    source_limited_direct = min(direct_remaining, report.source_limit_omitted_direct_samples)
+    direct_remaining -= source_limited_direct
+    _append_summary(
+        summaries,
+        samples=source_limited_direct,
+        attribution="direct",
+        code=_source_limit_summary("Other eBPF source rows not shown", report),
+    )
+    _append_summary(
+        summaries,
+        samples=direct_remaining,
+        attribution="direct",
+        code="Other eBPF samples not placed on a source/JIT detail row",
+    )
+
+    under_unmapped = min(under_remaining, program.under_bpf_caller_source_unmapped_samples)
+    under_remaining -= under_unmapped
+    _append_summary(
+        summaries,
+        samples=under_unmapped,
+        attribution="under",
+        code="under-eBPF samples without BPF caller source metadata",
+    )
+    retained_under_unmapped = sum(
+        hotspot.samples
+        for hotspot in program.kernel_hotspots
+        if hotspot.bpf_instruction_offset is None
+    )
+    omitted_under_unmapped = max(
+        0,
+        program.under_bpf_caller_source_unmapped_samples - retained_under_unmapped,
+    )
+    under_limited = max(
+        0,
+        program.under_bpf_hotspot_samples_omitted_by_limit
+        - min(
+            program.under_bpf_hotspot_samples_omitted_by_limit,
+            omitted_under_unmapped,
+        ),
+    )
+    under_limited = min(under_remaining, under_limited)
+    under_remaining -= under_limited
+    _append_summary(
+        summaries,
+        samples=under_limited,
+        attribution="under",
+        code=_limit_summary("Other under-eBPF samples not shown", report),
+    )
+    source_limited_under = min(under_remaining, report.source_limit_omitted_under_bpf_samples)
+    under_remaining -= source_limited_under
+    _append_summary(
+        summaries,
+        samples=source_limited_under,
+        attribution="under",
+        code=_source_limit_summary("Other under-eBPF source rows not shown", report),
+    )
+    _append_summary(
+        summaries,
+        samples=under_remaining,
+        attribution="under",
+        code="Other under-eBPF samples not placed on a source/JIT detail row",
+    )
+
+    _append_summary(
+        summaries,
+        samples=program.unaccounted_samples,
+        attribution="unaccounted",
+        code="Unaccounted samples (inclusive attribution invariant mismatch)",
+    )
+    return summaries
+
+
+def _append_summary(
+    rows: list[BrrInspectRow],
+    *,
+    samples: int,
+    attribution: InspectAttribution,
+    code: str,
+) -> None:
+    if samples <= 0:
+        return
+    rows.append(
+        BrrInspectRow(
+            kind="summary" if attribution != "unaccounted" else "unaccounted",
+            code=code,
+            samples=samples,
+            attribution=attribution,
+        )
+    )
+
+
+def _limit_summary(label: str, report: BrrInspectReport) -> str:
+    limit = report.profile.metadata.line_limit if report.profile is not None else 0
+    return f"{label} (--line-limit={limit})"
+
+
+def _source_limit_summary(label: str, report: BrrInspectReport) -> str:
+    return f"{label} (--source-limit={report.source_limit})"
+
+
+def limit_inspect_report_source_rows(
+    report: BrrInspectReport,
+    limit: int,
+) -> BrrInspectReport:
+    if limit <= 0:
+        return report
+    detail_rows = [
+        row for row in report.rows if row.kind != "summary" and row.attribution != "unaccounted"
+    ]
+    kept_rows = detail_rows[:limit]
+    omitted_rows = detail_rows[limit:]
+    return BrrInspectReport(
+        program=report.program,
+        mode=report.mode,
+        rows=kept_rows,
+        profile=report.profile,
+        profile_program=report.profile_program,
+        instruction_source=report.instruction_source,
+        source_limit=limit,
+        source_limit_omitted_direct_samples=sum(
+            row.samples for row in omitted_rows if row.attribution == "direct"
+        ),
+        source_limit_omitted_under_bpf_samples=sum(
+            row.samples for row in omitted_rows if row.attribution == "under"
+        ),
+    )
+
+
 def _allocate_integer_units(
     weighted: list[tuple[int, int]],
     *,
@@ -233,7 +403,9 @@ def profile_context_lines(report: BrrInspectReport) -> tuple[str, ...]:
         summary = "CPU: 0.0000% total; no samples attributed to this program (100% = one CPU)"
         return (summary, *(f"Warning: {warning}" for warning in warnings))
 
-    direct_samples, under_samples, unaccounted_samples = report.attribution_samples
+    direct_samples = program.samples
+    under_samples = program.kernel_samples
+    unaccounted_samples = program.unaccounted_samples
     total_samples = program.inclusive_samples
     total_cpu = program.inclusive_cpu_percent
     cpu_units = _allocate_integer_units(
@@ -696,11 +868,13 @@ def _instruction_hotspot_weights(
     instruction_offsets = {instruction.offset for instruction in instructions}
     weights: dict[int, _InspectWeight] = {}
     for hotspot in hotspots:
-        offset = _hotspot_instruction_offset(
-            hotspot,
-            jit_ranges=jit_ranges,
-            instruction_offsets=instruction_offsets,
-        )
+        offset = hotspot.instruction_offset
+        if offset not in instruction_offsets:
+            offset = _hotspot_instruction_offset(
+                hotspot,
+                jit_ranges=jit_ranges,
+                instruction_offsets=instruction_offsets,
+            )
         if offset is None:
             continue
         current = weights.get(offset, _InspectWeight(0, 0.0, 0.0))

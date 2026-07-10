@@ -37,6 +37,23 @@ def test_bare_brr_dispatches_to_top_with_root_options(monkeypatch: pytest.Monkey
     assert config.extended is True
     assert config.cumulative is True
     assert config.delay == 1.0
+    assert config.line_limit == 0
+
+
+def test_line_limit_defaults_depend_on_top_mode() -> None:
+    parser = cli.build_parser()
+
+    interactive = cli.config_from_args(parser.parse_args(["top"]), bpffs="/sys/fs/bpf")
+    textmode = cli.config_from_args(parser.parse_args(["top", "--textmode"]), bpffs="/sys/fs/bpf")
+    overridden = cli.config_from_args(
+        parser.parse_args(["top", "--line-limit", "7"]), bpffs="/sys/fs/bpf"
+    )
+    profile = parser.parse_args(["profile"])
+
+    assert interactive.line_limit == 0
+    assert textmode.line_limit == 10
+    assert overridden.line_limit == 7
+    assert profile.line_limit == 10
 
 
 @pytest.mark.parametrize("flag", ["--json", "--csv", "--pretty"])

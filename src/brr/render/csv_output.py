@@ -137,6 +137,13 @@ PROFILE_FIELDS = [
     "program_inclusive_cpu_percent",
     "program_kernel_samples",
     "program_kernel_cpu_percent",
+    "program_direct_source_mapped_samples",
+    "program_direct_source_unmapped_samples",
+    "program_under_bpf_caller_source_mapped_samples",
+    "program_under_bpf_caller_source_unmapped_samples",
+    "program_direct_hotspot_samples_omitted_by_limit",
+    "program_under_bpf_hotspot_samples_omitted_by_limit",
+    "program_unaccounted_samples",
     "pinned_paths",
     "hotspot_kind",
     "hotspot_rank",
@@ -144,6 +151,7 @@ PROFILE_FIELDS = [
     "hotspot_sample_percent",
     "hotspot_cpu_percent",
     "jited_address",
+    "instruction_offset",
     "file",
     "line",
     "column",
@@ -154,6 +162,7 @@ PROFILE_FIELDS = [
     "kernel_symbol_offset",
     "kernel_symbol_kind",
     "bpf_jited_address",
+    "bpf_instruction_offset",
     "bpf_file",
     "bpf_line",
     "bpf_column",
@@ -456,6 +465,21 @@ def _profile_program_to_row(program: BpfProfileProgram) -> dict[str, Any]:
         "program_inclusive_cpu_percent": program.inclusive_cpu_percent,
         "program_kernel_samples": program.kernel_samples,
         "program_kernel_cpu_percent": program.kernel_cpu_percent,
+        "program_direct_source_mapped_samples": program.direct_source_mapped_samples,
+        "program_direct_source_unmapped_samples": program.direct_source_unmapped_samples,
+        "program_under_bpf_caller_source_mapped_samples": (
+            program.under_bpf_caller_source_mapped_samples
+        ),
+        "program_under_bpf_caller_source_unmapped_samples": (
+            program.under_bpf_caller_source_unmapped_samples
+        ),
+        "program_direct_hotspot_samples_omitted_by_limit": (
+            program.direct_hotspot_samples_omitted_by_limit
+        ),
+        "program_under_bpf_hotspot_samples_omitted_by_limit": (
+            program.under_bpf_hotspot_samples_omitted_by_limit
+        ),
+        "program_unaccounted_samples": program.unaccounted_samples,
         "pinned_paths": program.pinned_paths,
     }
 
@@ -468,6 +492,7 @@ def _hotspot_to_row(hotspot: BpfHotspot, *, rank: int) -> dict[str, Any]:
         "hotspot_sample_percent": hotspot.sample_percent,
         "hotspot_cpu_percent": hotspot.cpu_percent,
         "jited_address": hotspot.jited_address,
+        "instruction_offset": hotspot.instruction_offset,
         "file": hotspot.file_name,
         "line": hotspot.line_number,
         "column": hotspot.column,
@@ -488,6 +513,7 @@ def _kernel_hotspot_to_row(hotspot: BpfKernelHotspot, *, rank: int) -> dict[str,
         "kernel_symbol_offset": hotspot.symbol_offset,
         "kernel_symbol_kind": hotspot.symbol_kind,
         "bpf_jited_address": hotspot.bpf_jited_address,
+        "bpf_instruction_offset": hotspot.bpf_instruction_offset,
         "bpf_file": hotspot.bpf_file_name,
         "bpf_line": hotspot.bpf_line_number,
         "bpf_column": hotspot.bpf_column,

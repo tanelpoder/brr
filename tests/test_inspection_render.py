@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from brr.inspection import BrrInspectReport, BrrInspectRow, build_inspect_report
+from brr.inspection import (
+    BrrInspectReport,
+    BrrInspectRow,
+    build_inspect_report,
+    limit_inspect_report_source_rows,
+)
 from brr.models import (
     BpfHotspot,
     BpfInstruction,
@@ -85,7 +90,10 @@ def test_inspect_samples_and_this_percent_rendering() -> None:
     assert any("40.00" in line and "direct instruction" in line for line in text.splitlines())
     assert any("20.00" in line and "helper child" in line for line in text.splitlines())
     assert not any("0.00" in line and "cold instruction" in line for line in text.splitlines())
-    assert any("40.00" in line and "Unaccounted samples" in line for line in text.splitlines())
+    assert any(
+        "40.00" in line and "Other eBPF samples not placed" in line for line in text.splitlines()
+    )
+    assert "Unaccounted samples" not in text
 
 
 def test_this_percent_is_blank_without_profile_or_with_zero_denominator() -> None:
@@ -134,7 +142,7 @@ def test_direct_only_profile_uses_direct_samples_as_inclusive_denominator() -> N
 
     assert profile_program.inclusive_samples == 40
     assert report.this_percent(0) == "50.00"
-    assert report.rows[-1].attribution == "unaccounted"
+    assert report.rows[-1].attribution == "direct"
     assert report.this_percent(len(report.rows) - 1) == "50.00"
 
 
@@ -181,7 +189,35 @@ def test_source_parent_and_helper_samples_do_not_overlap() -> None:
     assert [row.attribution for row in report.rows] == ["direct", "under"]
 
 
-def test_profile_context_is_compact_and_reports_unaccounted_cpu() -> None:
+def test_mixed_view_uses_translated_instruction_offset_for_hotspots() -> None:
+    source = BpfSourceLine("sample.bpf.c", 10, 2, "return 0;")
+    dump = BpfProgramDump(
+        program=_program(),
+        instructions=[BpfInstruction(24, "95000000", 0x95, 0, 0, 0, 0, source)],
+        line_info_count=1,
+    )
+    report = build_inspect_report(
+        dump,
+        mode="mixed",
+        hotspots=[
+            BpfHotspot(
+                samples=5,
+                sample_percent=100,
+                jited_address=0x1237,
+                instruction_offset=24,
+                file_name=source.file_name,
+                line_number=source.line_number,
+                column=source.column,
+                source=source.source,
+            )
+        ],
+    )
+
+    instruction = next(row for row in report.rows if row.kind == "instruction")
+    assert instruction.samples == 5
+
+
+def test_profile_context_uses_complete_direct_and_under_cpu_totals() -> None:
     profile_program = _profile_program()
     report = BrrInspectReport(
         program=_program(),
@@ -197,8 +233,8 @@ def test_profile_context_is_compact_and_reports_unaccounted_cpu() -> None:
     lines = render_brr_inspect(report).splitlines()
 
     assert lines[1] == (
-        "CPU: 150.0000% total = 120.0000% eBPF + 15.0000% under eBPF + "
-        "15.0000% unaccounted (100% = one CPU)"
+        "CPU: 150.0000% total = 120.0000% eBPF + 30.0000% under eBPF + "
+        "0.0000% unaccounted (100% = one CPU)"
     )
     assert lines[2] == "Warning: capture lost samples"
     assert not any(line.startswith(("Capture:", "Samples:")) for line in lines)
@@ -230,6 +266,155 @@ def test_this_percent_rounding_totals_exactly_one_hundred() -> None:
 
     assert percentages == ["33.34", "33.33", "33.33"]
     assert sum(float(value) for value in percentages) == 100.0
+
+
+def test_line_limits_remain_in_direct_and_under_attribution() -> None:
+    direct_hotspot = BpfHotspot(
+        samples=12,
+        sample_percent=63.16,
+        instruction_offset=0,
+        file_name="sample.bpf.c",
+        line_number=10,
+        source="direct",
+    )
+    under_hotspot = BpfKernelHotspot(
+        samples=24,
+        sample_percent=36.92,
+        cpu_percent=24,
+        ip=0xFFFF,
+        bpf_instruction_offset=0,
+        bpf_file_name="sample.bpf.c",
+        bpf_line_number=10,
+        bpf_source="direct",
+    )
+    profile_program = BpfProfileProgram(
+        id=42,
+        program_type="tracing",
+        name="sample",
+        tag=None,
+        samples=19,
+        sample_percent=100,
+        cpu_percent=19,
+        hotspots=[direct_hotspot],
+        kernel_samples=65,
+        kernel_cpu_percent=65,
+        kernel_hotspots=[under_hotspot],
+        inclusive_samples=84,
+        inclusive_cpu_percent=84,
+        direct_source_mapped_samples=19,
+        under_bpf_caller_source_mapped_samples=65,
+        direct_hotspot_samples_omitted_by_limit=7,
+        under_bpf_hotspot_samples_omitted_by_limit=41,
+    )
+    report = BrrInspectReport(
+        program=_program(),
+        mode="source",
+        rows=[
+            BrrInspectRow(kind="source", code="direct", samples=12, attribution="direct"),
+            BrrInspectRow(kind="kernel", code="under", samples=24, attribution="under"),
+        ],
+        profile=_profile(profile_program),
+        profile_program=profile_program,
+    )
+
+    rendered = render_brr_inspect(report)
+
+    assert sum(row.samples for row in report.rows if row.attribution == "direct") == 19
+    assert sum(row.samples for row in report.rows if row.attribution == "under") == 65
+    assert sum(float(report.this_percent(index)) for index in range(len(report.rows))) == 100
+    assert "Other eBPF samples not shown (--line-limit=5)" in rendered
+    assert "Other under-eBPF samples not shown (--line-limit=5)" in rendered
+    assert "Unaccounted samples" not in rendered
+    assert "19.0000% eBPF + 65.0000% under eBPF + 0.0000% unaccounted" in rendered
+
+
+def test_source_limit_adds_attributed_summary_rows_outside_limit() -> None:
+    profile_program = BpfProfileProgram(
+        id=42,
+        program_type="tracing",
+        name="sample",
+        tag=None,
+        samples=3,
+        sample_percent=100,
+    )
+    report = BrrInspectReport(
+        program=_program(),
+        mode="source",
+        rows=[
+            BrrInspectRow(kind="source", code=f"line {index}", samples=1, attribution="direct")
+            for index in range(3)
+        ],
+        profile=_profile(profile_program),
+        profile_program=profile_program,
+    )
+
+    limited = limit_inspect_report_source_rows(report, 1)
+
+    assert len([row for row in limited.rows if row.kind == "source"]) == 1
+    assert sum(row.samples for row in limited.rows if row.attribution == "direct") == 3
+    assert limited.rows[-1].samples == 2
+    assert "--source-limit=1" in limited.rows[-1].code
+    assert sum(float(limited.this_percent(index)) for index in range(len(limited.rows))) == 100
+
+
+def test_missing_source_metadata_keeps_known_cpu_attribution() -> None:
+    profile_program = BpfProfileProgram(
+        id=42,
+        program_type="tracing",
+        name="sample",
+        tag=None,
+        samples=2,
+        sample_percent=100,
+        kernel_samples=1,
+        direct_source_mapped_samples=1,
+        direct_source_unmapped_samples=1,
+        under_bpf_caller_source_unmapped_samples=1,
+    )
+    report = BrrInspectReport(
+        program=_program(),
+        mode="source",
+        rows=[BrrInspectRow(kind="source", code="mapped", samples=1, attribution="direct")],
+        profile=_profile(profile_program),
+        profile_program=profile_program,
+    )
+
+    assert sum(row.samples for row in report.rows if row.attribution == "direct") == 2
+    assert sum(row.samples for row in report.rows if row.attribution == "under") == 1
+    assert any("without BTF/JIT" in row.code for row in report.rows)
+    assert any("without BPF caller" in row.code for row in report.rows)
+    assert not any(row.attribution == "unaccounted" for row in report.rows)
+
+
+def test_only_inclusive_attribution_residual_is_unaccounted() -> None:
+    profile_program = BpfProfileProgram(
+        id=42,
+        program_type="tracing",
+        name="sample",
+        tag=None,
+        samples=8,
+        sample_percent=100,
+        cpu_percent=80,
+        kernel_samples=1,
+        kernel_cpu_percent=10,
+        inclusive_samples=10,
+        inclusive_cpu_percent=100,
+    )
+    report = BrrInspectReport(
+        program=_program(),
+        mode="source",
+        rows=[
+            BrrInspectRow(kind="source", code="direct", samples=8, attribution="direct"),
+            BrrInspectRow(kind="kernel", code="under", samples=1, attribution="under"),
+        ],
+        profile=_profile(profile_program),
+        profile_program=profile_program,
+    )
+
+    assert profile_program.unaccounted_samples == 1
+    assert report.rows[-1].attribution == "unaccounted"
+    assert report.rows[-1].samples == 1
+    assert "invariant mismatch" in report.rows[-1].code
+    assert sum(float(report.this_percent(index)) for index in range(len(report.rows))) == 100
 
 
 def test_collapsed_text_rolls_helper_samples_into_caller() -> None:

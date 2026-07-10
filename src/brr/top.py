@@ -19,6 +19,7 @@ from brr.inspection import (
     build_inspect_report,
     collect_bpftool_xlated,
     collect_inspect_report,
+    limit_inspect_report_source_rows,
     profile_status_message,
 )
 from brr.models import BpfHotspot, BpfKernelHotspot, BpfProfile, BpfProfileProgram, BpfProgramDump
@@ -159,7 +160,7 @@ def _fold_ranges_for_rows(
     hot_indexes = [
         index
         for index, row in enumerate(rows)
-        if row.kind in {"source", "kernel", "unaccounted"} and row.samples
+        if row.kind in {"source", "kernel", "summary", "unaccounted"} and row.samples
     ]
     if not hot_indexes:
         return []
@@ -481,9 +482,13 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--line-limit",
         type=_non_negative_int,
-        default=5,
+        default=None,
         metavar="N",
-        help="Maximum hotspot rows per selected program. Use 0 for no limit. Default: 5.",
+        help=(
+            "Maximum detailed hotspot rows per selected program; omitted samples remain "
+            "in direct/under 'Other' totals. Use 0 for no limit. Defaults: 10 in "
+            "textmode, 0 in the interactive TUI."
+        ),
     )
     parser.add_argument(
         "--source-limit",
@@ -491,8 +496,8 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
         default=0,
         metavar="N",
         help=(
-            "Maximum annotated source rows in textmode inspect output. "
-            "Use 0 for no limit. Default: 0."
+            "Maximum detailed inspect rows in textmode output; omitted samples "
+            "remain in direct/under 'Other' totals. Use 0 for no limit. Default: 0."
         ),
     )
     parser.add_argument(
@@ -591,6 +596,9 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
 
 def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
     devdir = _devmode_dir(args)
+    line_limit = args.line_limit
+    if line_limit is None:
+        line_limit = 10 if args.textmode else 0
     return BrrConfig(
         bpffs=bpffs,
         delay=args.delay,
@@ -599,7 +607,7 @@ def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
         event=args.event,
         profile_duration=args.profile_duration,
         frequency=args.frequency,
-        line_limit=args.line_limit,
+        line_limit=line_limit,
         source_limit=args.source_limit,
         inspect_mode=args.inspect_mode,
         theme=TEXTUAL_LIGHT_THEME if args.light else TEXTUAL_DARK_THEME,
@@ -688,14 +696,7 @@ def render_textmode_result(
             require_resolution=config.devmode_default_dir,
         )
         if config.source_limit > 0:
-            inspect = BrrInspectReport(
-                program=inspect.program,
-                mode=inspect.mode,
-                rows=inspect.rows[: config.source_limit],
-                profile=inspect.profile,
-                profile_program=inspect.profile_program,
-                instruction_source=inspect.instruction_source,
-            )
+            inspect = limit_inspect_report_source_rows(inspect, config.source_limit)
         sections.append(
             render_brr_inspect(
                 inspect,
@@ -730,6 +731,9 @@ def _maybe_enrich_inspect_report(
         profile=report.profile,
         profile_program=report.profile_program,
         instruction_source=report.instruction_source,
+        source_limit=report.source_limit,
+        source_limit_omitted_direct_samples=report.source_limit_omitted_direct_samples,
+        source_limit_omitted_under_bpf_samples=(report.source_limit_omitted_under_bpf_samples),
     )
 
 

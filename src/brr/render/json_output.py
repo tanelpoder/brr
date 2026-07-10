@@ -318,6 +318,19 @@ def _profile_program_to_json(
         "cpu_percent": program.cpu_percent,
         "inclusive_samples": program.inclusive_samples,
         "inclusive_cpu_percent": program.inclusive_cpu_percent,
+        "direct_source_mapped_samples": program.direct_source_mapped_samples,
+        "direct_source_unmapped_samples": program.direct_source_unmapped_samples,
+        "under_bpf_caller_source_mapped_samples": (program.under_bpf_caller_source_mapped_samples),
+        "under_bpf_caller_source_unmapped_samples": (
+            program.under_bpf_caller_source_unmapped_samples
+        ),
+        "direct_hotspot_samples_omitted_by_limit": (
+            program.direct_hotspot_samples_omitted_by_limit
+        ),
+        "under_bpf_hotspot_samples_omitted_by_limit": (
+            program.under_bpf_hotspot_samples_omitted_by_limit
+        ),
+        "unaccounted_samples": program.unaccounted_samples,
         "pinned_paths": list(program.pinned_paths),
         "hotspots": [_hotspot_to_json(hotspot) for hotspot in program.hotspots],
         "kernel_samples": program.kernel_samples,
@@ -337,6 +350,7 @@ def _hotspot_to_json(hotspot: BpfHotspot) -> dict[str, Any]:
         "sample_percent": hotspot.sample_percent,
         "cpu_percent": hotspot.cpu_percent,
         "jited_address": hotspot.jited_address,
+        "instruction_offset": hotspot.instruction_offset,
         "file": hotspot.file_name,
         "line": hotspot.line_number,
         "column": hotspot.column,
@@ -355,6 +369,7 @@ def _kernel_hotspot_to_json(hotspot: BpfKernelHotspot) -> dict[str, Any]:
         "symbol_offset": hotspot.symbol_offset,
         "symbol_kind": hotspot.symbol_kind,
         "bpf_jited_address": hotspot.bpf_jited_address,
+        "bpf_instruction_offset": hotspot.bpf_instruction_offset,
         "bpf_file": hotspot.bpf_file_name,
         "bpf_line": hotspot.bpf_line_number,
         "bpf_column": hotspot.bpf_column,

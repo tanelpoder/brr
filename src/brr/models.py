@@ -82,6 +82,7 @@ class BpfHotspot:
     sample_percent: float
     cpu_percent: float = 0.0
     jited_address: int | None = None
+    instruction_offset: int | None = None
     file_name: str | None = None
     line_number: int | None = None
     column: int | None = None
@@ -99,6 +100,7 @@ class BpfKernelHotspot:
     symbol_offset: int | None = None
     symbol_kind: str = "unknown"
     bpf_jited_address: int | None = None
+    bpf_instruction_offset: int | None = None
     bpf_file_name: str | None = None
     bpf_line_number: int | None = None
     bpf_column: int | None = None
@@ -121,12 +123,34 @@ class BpfProfileProgram:
     kernel_hotspots: list[BpfKernelHotspot] = field(default_factory=list)
     inclusive_samples: int = 0
     inclusive_cpu_percent: float = 0.0
+    direct_source_mapped_samples: int = 0
+    direct_source_unmapped_samples: int = 0
+    under_bpf_caller_source_mapped_samples: int = 0
+    under_bpf_caller_source_unmapped_samples: int = 0
+    direct_hotspot_samples_omitted_by_limit: int = 0
+    under_bpf_hotspot_samples_omitted_by_limit: int = 0
 
     def __post_init__(self) -> None:
         if self.inclusive_samples == 0:
             self.inclusive_samples = self.samples + self.kernel_samples
         if self.inclusive_cpu_percent == 0.0:
             self.inclusive_cpu_percent = round(self.cpu_percent + self.kernel_cpu_percent, 4)
+        if (
+            self.samples > 0
+            and self.direct_source_mapped_samples == 0
+            and self.direct_source_unmapped_samples == 0
+        ):
+            self.direct_source_mapped_samples = self.samples
+        if (
+            self.kernel_samples > 0
+            and self.under_bpf_caller_source_mapped_samples == 0
+            and self.under_bpf_caller_source_unmapped_samples == 0
+        ):
+            self.under_bpf_caller_source_mapped_samples = self.kernel_samples
+
+    @property
+    def unaccounted_samples(self) -> int:
+        return max(0, self.inclusive_samples - self.samples - self.kernel_samples)
 
 
 @dataclass(slots=True)

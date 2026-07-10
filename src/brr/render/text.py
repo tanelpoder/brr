@@ -182,22 +182,49 @@ def render_profile(
             if source_context_by_program is not None
             else None
         )
-        if program.hotspots:
+        if program.hotspots or program.direct_hotspot_samples_omitted_by_limit:
             rendered.append(f"Breakdown of program {program.id} ({program.name}):")
-            rendered.append(
-                _render_table(
-                    [_profile_hotspot_row(hotspot, wide=wide) for hotspot in program.hotspots]
+            hotspot_rows = [
+                _profile_hotspot_row(hotspot, wide=wide) for hotspot in program.hotspots
+            ]
+            if program.direct_hotspot_samples_omitted_by_limit:
+                hotspot_rows.append(
+                    _profile_other_hotspot_row(
+                        samples=program.direct_hotspot_samples_omitted_by_limit,
+                        cpu_percent=_sample_share_cpu(
+                            program.direct_hotspot_samples_omitted_by_limit,
+                            total_samples=program.samples,
+                            total_cpu_percent=program.cpu_percent,
+                        ),
+                        line_limit=profile.metadata.line_limit,
+                        wide=wide,
+                    )
                 )
-            )
-        if program.kernel_hotspots:
+            rendered.append(_render_table(hotspot_rows))
+        if program.kernel_hotspots or program.under_bpf_hotspot_samples_omitted_by_limit:
             rendered.append(f"Kernel/helper samples for program {program.id} ({program.name}):")
-            rendered.append(
-                _render_table(
-                    [
-                        _profile_kernel_hotspot_row(hotspot, wide=wide)
-                        for hotspot in program.kernel_hotspots
-                    ]
+            kernel_rows = [
+                _profile_kernel_hotspot_row(hotspot, wide=wide)
+                for hotspot in program.kernel_hotspots
+            ]
+            if program.under_bpf_hotspot_samples_omitted_by_limit:
+                kernel_rows.append(
+                    _profile_other_kernel_hotspot_row(
+                        samples=program.under_bpf_hotspot_samples_omitted_by_limit,
+                        cpu_percent=_sample_share_cpu(
+                            program.under_bpf_hotspot_samples_omitted_by_limit,
+                            total_samples=program.kernel_samples,
+                            total_cpu_percent=program.kernel_cpu_percent,
+                        ),
+                        line_limit=profile.metadata.line_limit,
+                        wide=wide,
+                    )
                 )
+            rendered.append(_render_table(kernel_rows))
+        if program.unaccounted_samples:
+            rendered.append(
+                f"Unaccounted samples for program {program.id}: "
+                f"{program.unaccounted_samples} (inclusive attribution invariant mismatch)"
             )
         if source_context is not None:
             rendered.append(
@@ -260,9 +287,7 @@ def render_perf_events(events: list[PerfEventAvailability]) -> str:
 
 
 def _profile_hotspot_row(hotspot: BpfHotspot, *, wide: bool) -> dict[str, str]:
-    row = {}
-    if wide:
-        row["SAMPLES"] = str(hotspot.samples)
+    row = {"SAMPLES": str(hotspot.samples)}
     row["CPU%"] = f"{hotspot.cpu_percent:.4f}"
     if wide:
         row["JIT_ADDR"] = (
@@ -270,7 +295,29 @@ def _profile_hotspot_row(hotspot: BpfHotspot, *, wide: bool) -> dict[str, str]:
         )
     row["FILE"] = _profile_file_name(hotspot.file_name, wide=wide)
     row["LINE"] = str(hotspot.line_number) if hotspot.line_number is not None else "-"
-    row["SOURCE"] = hotspot.source or "-"
+    row["SOURCE"] = hotspot.source or (
+        "[no BTF/JIT source metadata]" if hotspot.instruction_offset is None else "-"
+    )
+    return row
+
+
+def _profile_other_hotspot_row(
+    *,
+    samples: int,
+    cpu_percent: float,
+    line_limit: int,
+    wide: bool,
+) -> dict[str, str]:
+    row = {"SAMPLES": str(samples), "CPU%": f"{cpu_percent:.4f}"}
+    if wide:
+        row["JIT_ADDR"] = "-"
+    row.update(
+        {
+            "FILE": "-",
+            "LINE": "-",
+            "SOURCE": f"Other eBPF samples not shown (--line-limit={line_limit})",
+        }
+    )
     return row
 
 
@@ -302,9 +349,7 @@ def _profile_program_row(
 
 
 def _profile_kernel_hotspot_row(hotspot: BpfKernelHotspot, *, wide: bool) -> dict[str, str]:
-    row = {}
-    if wide:
-        row["SAMPLES"] = str(hotspot.samples)
+    row = {"SAMPLES": str(hotspot.samples)}
     row["CPU%"] = f"{hotspot.cpu_percent:.4f}"
     row["KIND"] = hotspot.symbol_kind
     row["SYMBOL"] = hotspot.symbol or "-"
@@ -319,8 +364,41 @@ def _profile_kernel_hotspot_row(hotspot: BpfKernelHotspot, *, wide: bool) -> dic
         )
     row["BPF_FILE"] = _profile_file_name(hotspot.bpf_file_name, wide=wide)
     row["BPF_LINE"] = str(hotspot.bpf_line_number) if hotspot.bpf_line_number is not None else "-"
-    row["BPF_SOURCE"] = hotspot.bpf_source or "-"
+    row["BPF_SOURCE"] = hotspot.bpf_source or (
+        "[no BPF caller source metadata]" if hotspot.bpf_instruction_offset is None else "-"
+    )
     return row
+
+
+def _profile_other_kernel_hotspot_row(
+    *,
+    samples: int,
+    cpu_percent: float,
+    line_limit: int,
+    wide: bool,
+) -> dict[str, str]:
+    row = {
+        "SAMPLES": str(samples),
+        "CPU%": f"{cpu_percent:.4f}",
+        "KIND": "other",
+        "SYMBOL": f"Other under-eBPF samples not shown (--line-limit={line_limit})",
+        "MODULE": "-",
+    }
+    if wide:
+        row.update({"IP": "-", "SYMBOL_OFF": "-", "BPF_JIT_ADDR": "-"})
+    row.update({"BPF_FILE": "-", "BPF_LINE": "-", "BPF_SOURCE": "-"})
+    return row
+
+
+def _sample_share_cpu(
+    samples: int,
+    *,
+    total_samples: int,
+    total_cpu_percent: float,
+) -> float:
+    if total_samples <= 0:
+        return 0.0
+    return round(total_cpu_percent * samples / total_samples, 4)
 
 
 def _render_source_context(report: SourceContextReport, *, title: str) -> str:

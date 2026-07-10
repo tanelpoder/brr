@@ -95,15 +95,19 @@ The `brr top` TUI automatically captures kernel functions beneath the selected
 eBPF program. A `+` in front of an eBPF code line indicates collapsed
 helper/kernel activity; use `e` and `c` to expand and collapse it. The compact
 header reports total sampled CPU (where 100% is one fully busy CPU) and splits
-it into displayed eBPF code, activity under eBPF, and unaccounted attribution.
-The `SAMPLES` and `%THIS` columns use non-overlapping leaves and total exactly
-100.00%; an explicit `Unaccounted` row explains samples omitted by source/JIT
-mapping or row limits.
+it into all direct eBPF code, activity under eBPF, and only a genuine inclusive
+attribution mismatch. The `SAMPLES` and `%THIS` columns use non-overlapping
+leaves and total exactly 100.00%. Detailed rows hidden by `--line-limit` or
+`--source-limit` remain attributed in `Other eBPF` and `Other under-eBPF` rows;
+they are never reported as unaccounted. Samples without source metadata also
+retain their known direct or under-eBPF CPU attribution.
 
-Textmode drilldowns show the full helper/kernel breakdown by default. Use
+Textmode drilldowns show expanded helper/kernel children by default. Use
 `brr top --textmode --profile-top --collapse-samples` to fold child activity
-into its calling eBPF rows. Standalone `brr profile` reports remain fully
-detailed.
+into its calling eBPF rows. Standalone profiles and profiled textmode default to
+the top ten detailed hotspots and add exact `Other` totals. The interactive TUI
+defaults to unlimited hotspots so no sampled detail is hidden; pass an explicit
+`--line-limit` value to override either default.
 
 ```
 $ sudo brr profile --kernel-samples

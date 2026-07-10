@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from typing import Literal
 
-from brr.bpf_details import JitRangeResolver, SourceLineMapper
+from brr.bpf_details import BPF_INSN_SIZE, JitRangeResolver, SourceLineMapper
 from brr.errors import (
     BrrError,
     PerfBufferAllocationError,
@@ -1125,6 +1125,10 @@ class ProfileAccumulator:
         self.non_bpf_samples = 0
         self.source_mapped_samples = 0
         self.source_unmapped_samples = 0
+        self.source_mapped_program_counts: Counter[int] = Counter()
+        self.source_unmapped_program_counts: Counter[int] = Counter()
+        self.kernel_source_mapped_program_counts: Counter[int] = Counter()
+        self.kernel_source_unmapped_program_counts: Counter[int] = Counter()
         self.callchain_samples = 0
         self.kernel_attributed_samples = 0
         self.kernel_unattributed_samples = 0
@@ -1152,6 +1156,10 @@ class ProfileAccumulator:
                 self.kernel_attributed_samples += 1
                 self.kernel_program_counts[caller_range.program_id] += 1
                 bpf_line_info = self.line_mappers[caller_range.program_id].for_jited_ip(caller_ip)
+                if bpf_line_info is None:
+                    self.kernel_source_unmapped_program_counts[caller_range.program_id] += 1
+                else:
+                    self.kernel_source_mapped_program_counts[caller_range.program_id] += 1
                 resolution = (
                     self.symbol_resolver.resolve(sample.ip)
                     if self.symbol_resolver is not None
@@ -1183,6 +1191,10 @@ class ProfileAccumulator:
                     self.source_unmapped_samples += 1
                 else:
                     self.source_mapped_samples += 1
+            if line_info is None:
+                self.source_unmapped_program_counts[jit_range.program_id] += 1
+            else:
+                self.source_mapped_program_counts[jit_range.program_id] += 1
             self.hotspot_counts[jit_range.program_id][_hotspot_key(line_info)] += 1
 
     def finish(
@@ -1212,6 +1224,20 @@ class ProfileAccumulator:
             program = details.program
             count = self.program_counts[program_id]
             kernel_count = self.kernel_program_counts[program_id]
+            hotspots = _hotspots_from_counts(
+                self.hotspot_counts[program_id],
+                program_samples=count,
+                duration=effective_duration,
+                frequency=self.frequency,
+                line_limit=self.line_limit,
+            )
+            kernel_hotspots = _kernel_hotspots_from_counts(
+                self.kernel_hotspot_counts[program_id],
+                program_kernel_samples=kernel_count,
+                duration=effective_duration,
+                frequency=self.frequency,
+                line_limit=self.line_limit,
+            )
             rows.append(
                 BpfProfileProgram(
                     id=program.id,
@@ -1226,31 +1252,33 @@ class ProfileAccumulator:
                         frequency=self.frequency,
                     ),
                     pinned_paths=program.pinned_paths,
-                    hotspots=_hotspots_from_counts(
-                        self.hotspot_counts[program_id],
-                        program_samples=count,
-                        duration=effective_duration,
-                        frequency=self.frequency,
-                        line_limit=self.line_limit,
-                    ),
+                    hotspots=hotspots,
                     kernel_samples=kernel_count,
                     kernel_cpu_percent=_cpu_percent(
                         kernel_count,
                         duration=effective_duration,
                         frequency=self.frequency,
                     ),
-                    kernel_hotspots=_kernel_hotspots_from_counts(
-                        self.kernel_hotspot_counts[program_id],
-                        program_kernel_samples=kernel_count,
-                        duration=effective_duration,
-                        frequency=self.frequency,
-                        line_limit=self.line_limit,
-                    ),
+                    kernel_hotspots=kernel_hotspots,
                     inclusive_samples=count + kernel_count,
                     inclusive_cpu_percent=_cpu_percent(
                         count + kernel_count,
                         duration=effective_duration,
                         frequency=self.frequency,
+                    ),
+                    direct_source_mapped_samples=self.source_mapped_program_counts[program_id],
+                    direct_source_unmapped_samples=self.source_unmapped_program_counts[program_id],
+                    under_bpf_caller_source_mapped_samples=(
+                        self.kernel_source_mapped_program_counts[program_id]
+                    ),
+                    under_bpf_caller_source_unmapped_samples=(
+                        self.kernel_source_unmapped_program_counts[program_id]
+                    ),
+                    direct_hotspot_samples_omitted_by_limit=max(
+                        0, count - sum(hotspot.samples for hotspot in hotspots)
+                    ),
+                    under_bpf_hotspot_samples_omitted_by_limit=max(
+                        0, kernel_count - sum(hotspot.samples for hotspot in kernel_hotspots)
                     ),
                 )
             )
@@ -1706,6 +1734,7 @@ def _read_ring_bytes(
 @dataclass(frozen=True, slots=True)
 class HotspotKey:
     jited_address: int | None
+    instruction_offset: int | None
     file_name: str | None
     line_number: int | None
     column: int | None
@@ -1720,6 +1749,7 @@ class KernelHotspotKey:
     symbol_offset: int | None
     symbol_kind: str
     bpf_jited_address: int | None
+    bpf_instruction_offset: int | None
     bpf_file_name: str | None
     bpf_line_number: int | None
     bpf_column: int | None
@@ -1728,9 +1758,10 @@ class KernelHotspotKey:
 
 def _hotspot_key(line_info: BpfLineInfo | None) -> HotspotKey:
     if line_info is None:
-        return HotspotKey(None, None, None, None, None)
+        return HotspotKey(None, None, None, None, None, None)
     return HotspotKey(
         jited_address=line_info.jited_address,
+        instruction_offset=line_info.insn_offset * BPF_INSN_SIZE,
         file_name=line_info.file_name,
         line_number=line_info.line_number,
         column=line_info.column,
@@ -1751,6 +1782,9 @@ def _kernel_hotspot_key(
         symbol_offset=resolution.offset,
         symbol_kind=resolution.kind,
         bpf_jited_address=line_info.jited_address if line_info is not None else caller_ip,
+        bpf_instruction_offset=(
+            line_info.insn_offset * BPF_INSN_SIZE if line_info is not None else None
+        ),
         bpf_file_name=line_info.file_name if line_info is not None else None,
         bpf_line_number=line_info.line_number if line_info is not None else None,
         bpf_column=line_info.column if line_info is not None else None,
@@ -1814,6 +1848,7 @@ def _hotspots_from_counts(
             sample_percent=_percent(count, program_samples),
             cpu_percent=_cpu_percent(count, duration=duration, frequency=frequency),
             jited_address=key.jited_address,
+            instruction_offset=key.instruction_offset,
             file_name=key.file_name,
             line_number=key.line_number,
             column=key.column,
@@ -1854,6 +1889,7 @@ def _kernel_hotspots_from_counts(
             symbol_offset=key.symbol_offset,
             symbol_kind=key.symbol_kind,
             bpf_jited_address=key.bpf_jited_address,
+            bpf_instruction_offset=key.bpf_instruction_offset,
             bpf_file_name=key.bpf_file_name,
             bpf_line_number=key.bpf_line_number,
             bpf_column=key.bpf_column,

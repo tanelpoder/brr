@@ -392,9 +392,12 @@ def build_parser() -> argparse.ArgumentParser:
     profile_parser.add_argument(
         "--line-limit",
         type=_non_negative_int,
-        default=5,
+        default=10,
         metavar="N",
-        help="Maximum hotspot rows per program. Use 0 for no limit. Default: 5.",
+        help=(
+            "Maximum detailed hotspot rows per program; omitted samples remain in "
+            "direct/under 'Other' totals. Use 0 for no limit. Default: 10."
+        ),
     )
     profile_parser.add_argument(
         "--program-id",

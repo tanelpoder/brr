@@ -211,21 +211,35 @@ telemetry for automation.
 Profiled inspect drilldowns label row counts as `SAMPLES` and show `%THIS`, the
 row's contribution to this selected program's inclusive sampled total. Source,
 instruction, and helper/kernel percentages are non-overlapping and add to
-exactly 100.00%. Samples that cannot be placed on a displayed row because of
-source/JIT mapping or row limits appear in an explicit `Unaccounted` row.
+exactly 100.00%. `--line-limit` limits detailed direct and kernel/helper hotspot
+rows independently, while `--source-limit` optionally limits detailed textmode
+inspect rows. Neither limit discards attribution: omitted detail is retained in
+explicit `Other eBPF` or `Other under-eBPF` aggregate rows. Use `--line-limit 0`
+to display every hotspot. Standalone `brr profile` and profiled textmode default
+to 10 detailed hotspots per direct/under bucket. The interactive TUI defaults
+to unlimited hotspots so its drilldown does not hide any samples; an explicit
+`brr top --line-limit N` still overrides that default.
 
 The compact drilldown header reports the program's total sampled CPU split into
-displayed eBPF code, activity under eBPF in helpers or other kernel functions,
-and unaccounted attribution. Here, 100% means one fully busy CPU, so totals may
-exceed 100% on multicore systems. Normal capture telemetry is omitted from this
-header; loss, multiplexing, and other capture problems still appear as
-warnings. Standalone `brr profile` output and its JSON/CSV capture telemetry
-remain detailed.
+eBPF code, activity under eBPF in helpers or other kernel functions, and any
+genuine inclusive-attribution mismatch. Missing source metadata and row limits
+do not change the direct/under CPU split. Here, 100% means one fully busy CPU,
+so totals may exceed 100% on multicore systems. Normal capture telemetry is
+omitted from this header; loss, multiplexing, and other capture problems still
+appear as warnings.
+
+Standalone `brr profile` adds the same `Other` aggregates below limited hotspot
+tables. Profile JSON and CSV expose per-program direct and caller source-mapping
+counts, direct and under-eBPF samples omitted from detailed hotspot lists,
+translated instruction offsets, and `unaccounted_samples`. Mapping and row
+retention are orthogonal diagnostics and may overlap; they should not be added
+together.
 
 `top --textmode` expands helper/kernel children by default. Add
 `--collapse-samples` to fold those children into their calling eBPF rows while
 retaining the same 100.00% total. The option requires both `--textmode` and
-`--profile-top`.
+`--profile-top`. Bare `top --textmode` remains an activity-only snapshot and
+does not start perf sampling.
 
 Very short BPF programs may receive only a handful of samples at 997 Hz,
 especially with `cpu-clock`. For stable program and source-line rankings, use a
