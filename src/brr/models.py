@@ -105,6 +105,7 @@ class BpfKernelHotspot:
     bpf_line_number: int | None = None
     bpf_column: int | None = None
     bpf_source: str | None = None
+    ip_count: int = 1
 
 
 @dataclass(slots=True)
@@ -121,6 +122,7 @@ class BpfProfileProgram:
     kernel_samples: int = 0
     kernel_cpu_percent: float = 0.0
     kernel_hotspots: list[BpfKernelHotspot] = field(default_factory=list)
+    kernel_function_hotspots: list[BpfKernelHotspot] = field(default_factory=list)
     inclusive_samples: int = 0
     inclusive_cpu_percent: float = 0.0
     direct_source_mapped_samples: int = 0
@@ -129,6 +131,7 @@ class BpfProfileProgram:
     under_bpf_caller_source_unmapped_samples: int = 0
     direct_hotspot_samples_omitted_by_limit: int = 0
     under_bpf_hotspot_samples_omitted_by_limit: int = 0
+    under_bpf_function_samples_omitted_by_limit: int = 0
 
     def __post_init__(self) -> None:
         if self.inclusive_samples == 0:
@@ -147,6 +150,12 @@ class BpfProfileProgram:
             and self.under_bpf_caller_source_unmapped_samples == 0
         ):
             self.under_bpf_caller_source_mapped_samples = self.kernel_samples
+        if self.kernel_hotspots and not self.kernel_function_hotspots:
+            self.kernel_function_hotspots = list(self.kernel_hotspots)
+            if self.under_bpf_function_samples_omitted_by_limit == 0:
+                self.under_bpf_function_samples_omitted_by_limit = (
+                    self.under_bpf_hotspot_samples_omitted_by_limit
+                )
 
     @property
     def unaccounted_samples(self) -> int:

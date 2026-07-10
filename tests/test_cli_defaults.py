@@ -56,6 +56,25 @@ def test_line_limit_defaults_depend_on_top_mode() -> None:
     assert profile.line_limit == 10
 
 
+def test_kernel_ip_detail_is_available_for_profile_and_top() -> None:
+    parser = cli.build_parser()
+
+    profile = parser.parse_args(["profile", "--kernel-samples", "--kernel-ip-detail"])
+    top = parser.parse_args(["top", "--kernel-samples", "--kernel-ip-detail"])
+    config = cli.config_from_args(top, bpffs="/sys/fs/bpf")
+
+    assert profile.kernel_ip_detail is True
+    assert config.kernel_ip_detail is True
+
+
+@pytest.mark.parametrize("command", ["profile", "top"])
+def test_kernel_ip_detail_requires_kernel_samples(command: str, capsys) -> None:
+    with pytest.raises(SystemExit, match="2"):
+        cli.main([command, "--kernel-ip-detail"])
+
+    assert "--kernel-ip-detail requires --kernel-samples" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("flag", ["--json", "--csv", "--pretty"])
 def test_bare_output_flags_require_a_subcommand(flag: str, capsys) -> None:
     with pytest.raises(SystemExit, match="2"):
@@ -102,7 +121,9 @@ def test_root_help_and_version_remain_available(capsys) -> None:
 
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
-    assert "eBPF Runtime Reporter and Profiler" in capsys.readouterr().out
+    version_output = capsys.readouterr().out
+    assert version_output.startswith("brr 0.5.1")
+    assert "eBPF Runtime Reporter and Profiler" in version_output
 
 
 @pytest.mark.parametrize(

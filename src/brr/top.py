@@ -74,6 +74,17 @@ PROFILE_OPTION_INPUT_ORDER = (
 PROFILE_OPTION_INPUT_IDS = frozenset(PROFILE_OPTION_INPUT_ORDER)
 PROFILE_OPTION_WIDGET_ORDER = (*PROFILE_OPTION_INPUT_ORDER, "profile-kernel-samples")
 PROFILE_OPTION_WIDGET_IDS = frozenset(PROFILE_OPTION_WIDGET_ORDER)
+INSPECT_HELP_ROWS = (
+    ("Up/Down, PgUp/PgDn, Home/End", "Navigate rows"),
+    ("Space", "Switch source/mixed view"),
+    ("/", "Search source"),
+    ("p / P", "Profile with defaults / choose options"),
+    ("i", "Toggle kernel function/IP detail"),
+    ("m / M", "Toggle source markers / marker legend"),
+    ("e / c", "Expand / collapse selected branch"),
+    ("E / C", "Expand / collapse all branches"),
+    ("h / Esc", "Close this help"),
+)
 InputSubmissionTarget = Literal["delay", "profile", "search", "none"]
 
 
@@ -147,6 +158,14 @@ class InspectCursorAnchor:
     line_number: int | None
     source: str | None
     offset: int | None
+    kernel_function_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InspectViewportState:
+    scroll_x: float
+    scroll_y: float
+    cursor_viewport_y: float
 
 
 def _fold_ranges_for_rows(
@@ -225,15 +244,29 @@ def _inspect_cursor_anchor(
     if visible_row < 0 or visible_row >= len(visible_rows.rows):
         return None
     row = visible_rows.rows[visible_row]
-    if row.kind not in {"source", "instruction"}:
+    if row.kind not in {"source", "instruction", "kernel"}:
         return None
-    if row.file_name is None and row.line_number is None and row.offset is None:
+    if (
+        row.file_name is None
+        and row.line_number is None
+        and row.offset is None
+        and row.kernel_function_key is None
+    ):
         return None
     return InspectCursorAnchor(
         file_name=row.file_name,
         line_number=row.line_number,
         source=_anchor_source(row),
         offset=row.offset,
+        kernel_function_key=row.kernel_function_key,
+    )
+
+
+def _inspect_viewport_state(table) -> InspectViewportState:
+    return InspectViewportState(
+        scroll_x=float(table.scroll_x),
+        scroll_y=float(table.scroll_y),
+        cursor_viewport_y=float(table.cursor_row) - float(table.scroll_y),
     )
 
 
@@ -246,6 +279,12 @@ def _visible_row_for_anchor(
     source_fallback: int | None = None
     file_line_fallback: int | None = None
     for index, row in enumerate(visible_rows.rows):
+        if (
+            anchor.kernel_function_key is not None
+            and row.kind == "kernel"
+            and row.kernel_function_key == anchor.kernel_function_key
+        ):
+            return index
         if row.kind != "source":
             continue
         if (
@@ -387,6 +426,7 @@ class BrrConfig:
     perf_drain_ms: int | None = None
     fail_on_loss: bool = False
     collapse_samples: bool = False
+    kernel_ip_detail: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -541,6 +581,14 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--kernel-ip-detail",
+        action="store_true",
+        help=(
+            "Start human profile output with separate kernel/helper rows for exact "
+            "sampled IPs instead of function groups."
+        ),
+    )
+    parser.add_argument(
         "--call-graph",
         choices=CALL_GRAPH_MODES,
         default="fp",
@@ -622,6 +670,7 @@ def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
         perf_drain_ms=args.perf_drain_ms,
         fail_on_loss=args.fail_on_loss,
         collapse_samples=args.collapse_samples,
+        kernel_ip_detail=args.kernel_ip_detail,
     )
 
 
@@ -686,6 +735,7 @@ def render_textmode_result(
             frequency=config.frequency,
             line_limit=config.line_limit,
             kernel_samples=config.kernel_samples,
+            kernel_ip_detail=config.kernel_ip_detail,
             call_graph=config.call_graph,
             perf_buffer_pages=config.perf_buffer_pages,
             perf_drain_ms=config.perf_drain_ms,
@@ -731,6 +781,7 @@ def _maybe_enrich_inspect_report(
         profile=report.profile,
         profile_program=report.profile_program,
         instruction_source=report.instruction_source,
+        kernel_ip_detail=report.kernel_ip_detail,
         source_limit=report.source_limit,
         source_limit_omitted_direct_samples=report.source_limit_omitted_direct_samples,
         source_limit_omitted_under_bpf_samples=(report.source_limit_omitted_under_bpf_samples),
@@ -776,6 +827,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         report: BrrInspectReport
         preserve_row: int
         preserve_anchor: InspectCursorAnchor | None
+        viewport_state: InspectViewportState | None
         jump_to_hotspot: bool
 
     @dataclass(frozen=True, slots=True)
@@ -787,6 +839,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         profile_program: BpfProfileProgram | None
         hotspots: list[BpfHotspot]
         kernel_hotspots: list[BpfKernelHotspot]
+        kernel_function_hotspots: list[BpfKernelHotspot]
 
     class BrrTop(App[None]):
         CSS = """
@@ -862,6 +915,25 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         #marker-legend-table {
             height: 1fr;
         }
+
+        #inspect-help {
+            layer: overlay;
+            width: 86;
+            height: 14;
+            offset: 4 3;
+            border: round $accent;
+            background: $panel;
+            padding: 0 1;
+            display: none;
+        }
+
+        #inspect-help-title {
+            height: 1;
+        }
+
+        #inspect-help-table {
+            height: 1fr;
+        }
         """
         BINDINGS = [
             ("ctrl+c", "quit", "Quit"),
@@ -875,8 +947,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             ("x", "toggle_extended", "Extended"),
             ("p", "profile_default", "Profile"),
             ("P", "profile_custom", "Profile options"),
-            ("i", "toggle_inspect_markers", "Markers"),
-            ("I", "toggle_marker_legend", "Marker legend"),
+            ("i", "toggle_kernel_ip_detail", "Kernel IPs"),
+            ("m", "toggle_inspect_markers", "Markers"),
+            ("M", "toggle_marker_legend", "Marker legend"),
             ("e", "expand_fold", "Expand fold"),
             ("c", "toggle_cumulative_or_collapse_fold", "Cumulative/fold"),
             ("E", "expand_all_folds", "Expand all"),
@@ -914,6 +987,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_profile_program: BpfProfileProgram | None = None
             self.inspect_hotspots: list[BpfHotspot] = []
             self.inspect_kernel_hotspots: list[BpfKernelHotspot] = []
+            self.inspect_kernel_function_hotspots: list[BpfKernelHotspot] = []
+            self.inspect_kernel_ip_detail = config.kernel_ip_detail
             self.inspect_report: BrrInspectReport | None = None
             self.inspect_fold_ranges: list[InspectFoldRange] = []
             self.inspect_expanded_fold_ids: set[int] = set()
@@ -926,6 +1001,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_status_message: str | None = None
             self.inspect_markers_visible = False
             self.inspect_marker_legend_open = False
+            self.inspect_help_open = False
             self.worker_tokens: dict[int, tuple[str, int]] = {}
             self.next_token = 0
             self.activity_token = 0
@@ -958,6 +1034,11 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     DataTable(id="marker-legend-table"),
                     id="inspect-marker-legend",
                 ),
+                Vertical(
+                    Static("Drilldown help", id="inspect-help-title"),
+                    DataTable(id="inspect-help-table"),
+                    id="inspect-help",
+                ),
                 id="inspect-modal",
             )
             yield Footer()
@@ -969,7 +1050,14 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 self.delay_options_open or self.profile_options_open or self.inspect_search_open
             )
             if action == "close_inspect":
-                return self.inspect_open or input_open or self.inspect_marker_legend_open
+                return (
+                    self.inspect_open
+                    or input_open
+                    or self.inspect_marker_legend_open
+                    or self.inspect_help_open
+                )
+            if self.inspect_help_open:
+                return action == "toggle_help"
             if self.inspect_marker_legend_open:
                 return action in {"toggle_marker_legend"}
             if input_open:
@@ -993,6 +1081,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 "profile_default",
                 "profile_custom",
                 "search_source",
+                "toggle_kernel_ip_detail",
                 "toggle_inspect_markers",
                 "toggle_marker_legend",
             }:
@@ -1013,7 +1102,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             inspect_table.cursor_type = "row"
             inspect_table.show_row_labels = False
             inspect_table.zebra_stripes = True
-            inspect_table.add_columns("SAMPLES", "%THIS", "CODE")
+            inspect_table.add_columns("%THIS", "SAMPLES", "CODE")
             marker_table = self.query_one("#marker-legend-table", DataTable)
             marker_table.cursor_type = "row"
             marker_table.show_row_labels = False
@@ -1021,6 +1110,13 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             marker_table.add_columns("MARKER", "MEANING")
             for marker, description in MARKER_DESCRIPTIONS:
                 marker_table.add_row(Text(f"[{marker}]"), description)
+            help_table = self.query_one("#inspect-help-table", DataTable)
+            help_table.cursor_type = "row"
+            help_table.show_row_labels = False
+            help_table.zebra_stripes = True
+            help_table.add_columns("KEY", "ACTION")
+            for key, description in INSPECT_HELP_ROWS:
+                help_table.add_row(key, description)
             self.action_refresh()
             self._restart_refresh_timer()
 
@@ -1142,6 +1238,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             if self.delay_options_open:
                 self._close_delay_options()
                 return
+            if self.inspect_help_open:
+                self._close_inspect_help()
+                return
             if self.inspect_marker_legend_open:
                 self.inspect_marker_legend_open = False
                 self._set_marker_legend_visible(False)
@@ -1184,6 +1283,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_profile_program = None
             self.inspect_hotspots = []
             self.inspect_kernel_hotspots = []
+            self.inspect_kernel_function_hotspots = []
+            self.inspect_kernel_ip_detail = self.config.kernel_ip_detail
             self.inspect_report = None
             self.inspect_fold_ranges = []
             self.inspect_expanded_fold_ids = set()
@@ -1196,11 +1297,13 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_status_message = None
             self.inspect_markers_visible = False
             self.inspect_marker_legend_open = False
+            self.inspect_help_open = False
             self._set_profile_options_visible(False)
             search = self.query_one("#inspect-search", Input)
             search.value = ""
             self._set_search_visible(False)
             self._set_marker_legend_visible(False)
+            self._set_inspect_help_visible(False)
             self.query_one("#inspect-title", Static).update("")
             self.query_one("#inspect-status", Static).update("")
             self.query_one("#inspect-table", DataTable).clear()
@@ -1259,7 +1362,10 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     and row.child_key not in self.inspect_expanded_child_keys
                 ):
                     self.inspect_expanded_child_keys.add(row.child_key)
-                    self._render_inspect(preserve_row=table.cursor_row)
+                    self._render_inspect(
+                        preserve_row=table.cursor_row,
+                        preserve_viewport=True,
+                    )
                     return
             if not self._can_change_folds():
                 return
@@ -1267,7 +1373,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             if fold_id is None:
                 return
             self.inspect_expanded_fold_ids.add(fold_id)
-            self._render_inspect(preserve_row=table.cursor_row)
+            self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
 
         def action_toggle_cumulative_or_collapse_fold(self) -> None:
             if not self.inspect_open:
@@ -1286,7 +1392,10 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 row = visible.rows[table.cursor_row]
                 if row.child_key is not None and row.child_key in self.inspect_expanded_child_keys:
                     self.inspect_expanded_child_keys.discard(row.child_key)
-                    self._render_inspect(preserve_row=table.cursor_row)
+                    self._render_inspect(
+                        preserve_row=table.cursor_row,
+                        preserve_viewport=True,
+                    )
                     return
             if not self._can_change_folds():
                 return
@@ -1297,7 +1406,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             if fold_range is None or fold_range.id not in self.inspect_expanded_fold_ids:
                 return
             self.inspect_expanded_fold_ids.discard(fold_range.id)
-            self._render_inspect(target_fold_id=fold_range.id)
+            self._render_inspect(target_fold_id=fold_range.id, preserve_viewport=True)
 
         def action_change_delay(self) -> None:
             if self.inspect_open or self.delay_options_open:
@@ -1313,6 +1422,21 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.refresh_bindings()
 
         def action_toggle_help(self) -> None:
+            if self.inspect_open:
+                if self.inspect_help_open:
+                    self._close_inspect_help()
+                    return
+                if self.inspect_marker_legend_open:
+                    self.inspect_marker_legend_open = False
+                    self._set_marker_legend_visible(False)
+                self.inspect_help_open = True
+                self._set_inspect_help_visible(True)
+                self.query_one("#inspect-status", Static).update(
+                    "drilldown help open; Esc or h closes"
+                )
+                self.query_one("#inspect-help-table", DataTable).focus()
+                self.refresh_bindings()
+                return
             if self.screen.query(HelpPanel):
                 self.action_hide_help_panel()
             else:
@@ -1326,7 +1450,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_expanded_fold_ids = {
                 fold_range.id for fold_range in self.inspect_fold_ranges
             }
-            self._render_inspect(preserve_row=table.cursor_row)
+            self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
 
         def action_collapse_all_folds(self) -> None:
             if not self.inspect_open or self.profile_options_open or self.inspect_loading:
@@ -1334,7 +1458,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_expanded_fold_ids = set()
             self.inspect_expanded_child_keys = set()
             target_fold_id = self.inspect_fold_ranges[0].id if self.inspect_fold_ranges else None
-            self._render_inspect(target_fold_id=target_fold_id)
+            self._render_inspect(target_fold_id=target_fold_id, preserve_viewport=True)
 
         def action_search_source(self) -> None:
             if (
@@ -1361,7 +1485,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.query_one("#inspect-status", Static).update(
                 "Search source; Enter jumps to first match, Esc clears search"
             )
-            self._render_inspect(preserve_row=table.cursor_row)
+            self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
 
         def action_profile_default(self) -> None:
             if (
@@ -1587,6 +1711,9 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 kernel_hotspots = (
                     profile_program.kernel_hotspots if profile_program is not None else []
                 )
+                kernel_function_hotspots = (
+                    profile_program.kernel_function_hotspots if profile_program is not None else []
+                )
                 return ProfileResult(
                     token=token,
                     program_id=program_id,
@@ -1595,6 +1722,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     profile_program=profile_program,
                     hotspots=hotspots,
                     kernel_hotspots=kernel_hotspots,
+                    kernel_function_hotspots=kernel_function_hotspots,
                 )
 
             worker = self.run_worker(
@@ -1614,12 +1742,16 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             preserve_row: int = 0,
             preserve_anchor: InspectCursorAnchor | None = None,
             target_fold_id: int | None = None,
+            preserve_viewport: bool = False,
+            viewport_state: InspectViewportState | None = None,
         ) -> None:
             self._render_inspect_view(
                 jump_to_hotspot=jump_to_hotspot,
                 preserve_row=preserve_row,
                 preserve_anchor=preserve_anchor,
                 target_fold_id=target_fold_id,
+                preserve_viewport=preserve_viewport,
+                viewport_state=viewport_state,
             )
 
         def _render_inspect_view(
@@ -1629,15 +1761,25 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             preserve_row: int = 0,
             preserve_anchor: InspectCursorAnchor | None = None,
             target_fold_id: int | None = None,
+            preserve_viewport: bool = False,
+            viewport_state: InspectViewportState | None = None,
         ) -> None:
             if self.inspect_report is None:
                 return
             title = self.query_one("#inspect-title", Static)
             status = self.query_one("#inspect-status", Static)
             table = self.query_one("#inspect-table", DataTable)
+            if preserve_viewport and viewport_state is None:
+                viewport_state = _inspect_viewport_state(table)
             title.update(
                 f"program {self.inspect_report.program.id} {self.inspect_report.program.name} "
                 f"mode={self.inspect_report.mode} disasm={self.inspect_report.instruction_source}"
+                + (
+                    f" kernel={'IPs' if self.inspect_kernel_ip_detail else 'functions'}"
+                    if self.inspect_profile_program is not None
+                    and self.inspect_profile_program.kernel_samples > 0
+                    else ""
+                )
             )
             target_row = _hottest_inspect_row(self.inspect_report) if jump_to_hotspot else None
             if self.inspect_profile is None:
@@ -1686,8 +1828,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                             for child_index in child_indexes
                         )
                     table.add_row(
-                        str(samples) if samples > 0 else "",
                         f"{basis_points / 100:.2f}" if basis_points is not None else "",
+                        str(samples) if samples > 0 else "",
                         _inspect_code_cell(
                             row,
                             show_markers=self.inspect_markers_visible,
@@ -1703,7 +1845,21 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 preserve_row=preserve_row,
             )
             if visible_target_row is not None:
-                table.move_cursor(row=visible_target_row, column=0, animate=False, scroll=True)
+                if viewport_state is None:
+                    table.move_cursor(row=visible_target_row, column=0, animate=False, scroll=True)
+                else:
+                    table.move_cursor(
+                        row=visible_target_row,
+                        column=0,
+                        animate=False,
+                        scroll=False,
+                    )
+                    table.scroll_to(
+                        x=viewport_state.scroll_x,
+                        y=visible_target_row - viewport_state.cursor_viewport_y,
+                        animate=False,
+                        force=True,
+                    )
             if self.inspect_search_focused:
                 self.query_one("#inspect-search", Input).focus()
             else:
@@ -1728,6 +1884,18 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         def _set_marker_legend_visible(self, visible: bool) -> None:
             self.query_one("#inspect-marker-legend", Vertical).display = visible
 
+        def _set_inspect_help_visible(self, visible: bool) -> None:
+            self.query_one("#inspect-help", Vertical).display = visible
+
+        def _close_inspect_help(self) -> None:
+            self.inspect_help_open = False
+            self._set_inspect_help_visible(False)
+            self.query_one("#inspect-status", Static).update(
+                self.inspect_status_message or self._inspect_help_text()
+            )
+            self.query_one("#inspect-table", DataTable).focus()
+            self.refresh_bindings()
+
         def _close_search(self) -> None:
             self.inspect_search_open = False
             self.inspect_search_focused = False
@@ -1738,7 +1906,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 self.inspect_status_message or self._inspect_help_text()
             )
             table = self.query_one("#inspect-table", DataTable)
-            self._render_inspect(preserve_row=table.cursor_row)
+            self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
             self.refresh_bindings()
 
         def action_toggle_inspect_markers(self) -> None:
@@ -1749,21 +1917,44 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                 self._visible_inspect_rows(table), table.cursor_row
             )
             self.inspect_markers_visible = not self.inspect_markers_visible
-            self._render_inspect(preserve_row=table.cursor_row, preserve_anchor=preserve_anchor)
+            self._render_inspect(
+                preserve_row=table.cursor_row,
+                preserve_anchor=preserve_anchor,
+                preserve_viewport=True,
+            )
             marker_status = "shown" if self.inspect_markers_visible else "hidden"
             self.query_one("#inspect-status", Static).update(
                 f"source mapping markers {marker_status}"
             )
             self.refresh_bindings()
 
+        def action_toggle_kernel_ip_detail(self) -> None:
+            if (
+                not self.inspect_open
+                or self.inspect_loading
+                or self.inspect_dump is None
+                or self.inspect_profile_program is None
+            ):
+                return
+            if self.inspect_profile_program.kernel_samples <= 0:
+                self.query_one("#inspect-status", Static).update(
+                    "no kernel/helper samples; profile with kernel samples enabled"
+                )
+                return
+            self.inspect_kernel_ip_detail = not self.inspect_kernel_ip_detail
+            self._schedule_inspect_render(jump_to_hotspot=False)
+
         def action_toggle_marker_legend(self) -> None:
             if not self.inspect_open or self.inspect_loading or self.inspect_report is None:
                 return
+            if self.inspect_help_open:
+                self.inspect_help_open = False
+                self._set_inspect_help_visible(False)
             self.inspect_marker_legend_open = not self.inspect_marker_legend_open
             self._set_marker_legend_visible(self.inspect_marker_legend_open)
             if self.inspect_marker_legend_open:
                 self.query_one("#inspect-status", Static).update(
-                    "marker legend open; Esc or I closes"
+                    "marker legend open; Esc or M closes"
                 )
                 self.query_one("#marker-legend-table", DataTable).focus()
             else:
@@ -1912,7 +2103,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             self.inspect_search_query = event.value
             self.inspect_search_focused = True
             table = self.query_one("#inspect-table", DataTable)
-            self._render_inspect(preserve_row=table.cursor_row)
+            self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
 
         def on_input_submitted(self, event: Input.Submitted) -> None:
             target = _input_submission_target(
@@ -1967,7 +2158,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
         def on_resize(self, _event) -> None:
             if self.inspect_open and self.inspect_report is not None and not self.inspect_loading:
                 table = self.query_one("#inspect-table", DataTable)
-                self._render_inspect(preserve_row=table.cursor_row)
+                self._render_inspect(preserve_row=table.cursor_row, preserve_viewport=True)
 
         def _schedule_inspect_render(self, *, jump_to_hotspot: bool) -> None:
             if self.inspect_dump is None:
@@ -1978,13 +2169,19 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
             dump = self.inspect_dump
             mode = self.inspect_mode
             hotspots = list(self.inspect_hotspots)
-            kernel_hotspots = list(self.inspect_kernel_hotspots)
+            kernel_ip_detail = self.inspect_kernel_ip_detail
+            kernel_hotspots = list(
+                self.inspect_kernel_hotspots
+                if kernel_ip_detail
+                else self.inspect_kernel_function_hotspots
+            )
             profile = self.inspect_profile
             profile_program = self.inspect_profile_program
             preserve_row = table.cursor_row
             preserve_anchor = _inspect_cursor_anchor(
                 self._visible_inspect_rows(table), preserve_row
             )
+            viewport_state = _inspect_viewport_state(table)
             self.inspect_loading = True
             self.query_one("#inspect-status", Static).update(f"Rendering {mode} view...")
 
@@ -1994,6 +2191,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     mode=mode,
                     hotspots=hotspots,
                     kernel_hotspots=kernel_hotspots,
+                    kernel_ip_detail=kernel_ip_detail,
                     bpftool_provider=collect_bpftool_xlated,
                 )
                 report = self._enrich_inspect_report(report)
@@ -2006,9 +2204,11 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                         profile=profile,
                         profile_program=profile_program,
                         instruction_source=report.instruction_source,
+                        kernel_ip_detail=kernel_ip_detail,
                     ),
                     preserve_row=preserve_row,
                     preserve_anchor=preserve_anchor,
+                    viewport_state=viewport_state,
                     jump_to_hotspot=jump_to_hotspot,
                 )
 
@@ -2035,8 +2235,8 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
 
         def _inspect_help_text(self) -> str:
             return (
-                "Space toggles source/mixed | i markers | I legend | "
-                "p/P profile | e/c/E/C folds | Esc closes"
+                "Space source/mixed | i kernel IPs | m markers | M legend | "
+                "p/P profile | e/c/E/C folds | h help | Esc closes"
             )
 
         def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
@@ -2097,6 +2297,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                         jump_to_hotspot=result.jump_to_hotspot,
                         preserve_row=result.preserve_row,
                         preserve_anchor=result.preserve_anchor,
+                        viewport_state=result.viewport_state,
                     )
                 return
 
@@ -2109,6 +2310,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
                     self.inspect_profile_program = result.profile_program
                     self.inspect_hotspots = result.hotspots
                     self.inspect_kernel_hotspots = result.kernel_hotspots
+                    self.inspect_kernel_function_hotspots = result.kernel_function_hotspots
                     self.inspect_fold_ranges = []
                     self.inspect_expanded_fold_ids = set()
                     self.inspect_expanded_child_keys = set()

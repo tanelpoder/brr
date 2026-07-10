@@ -160,6 +160,7 @@ def render_profile(
     *,
     wide: bool = False,
     extended: bool = False,
+    kernel_ip_detail: bool = False,
     source_context_by_program: dict[int, SourceContextReport] | None = None,
 ) -> str:
     if not profile.items:
@@ -201,18 +202,30 @@ def render_profile(
                     )
                 )
             rendered.append(_render_table(hotspot_rows))
-        if program.kernel_hotspots or program.under_bpf_hotspot_samples_omitted_by_limit:
+        kernel_hotspots = (
+            program.kernel_hotspots if kernel_ip_detail else program.kernel_function_hotspots
+        )
+        under_omitted_by_limit = (
+            program.under_bpf_hotspot_samples_omitted_by_limit
+            if kernel_ip_detail
+            else program.under_bpf_function_samples_omitted_by_limit
+        )
+        if kernel_hotspots or under_omitted_by_limit:
             rendered.append(f"Kernel/helper samples for program {program.id} ({program.name}):")
             kernel_rows = [
-                _profile_kernel_hotspot_row(hotspot, wide=wide)
-                for hotspot in program.kernel_hotspots
+                _profile_kernel_hotspot_row(
+                    hotspot,
+                    wide=wide,
+                    kernel_ip_detail=kernel_ip_detail,
+                )
+                for hotspot in kernel_hotspots
             ]
-            if program.under_bpf_hotspot_samples_omitted_by_limit:
+            if under_omitted_by_limit:
                 kernel_rows.append(
                     _profile_other_kernel_hotspot_row(
-                        samples=program.under_bpf_hotspot_samples_omitted_by_limit,
+                        samples=under_omitted_by_limit,
                         cpu_percent=_sample_share_cpu(
-                            program.under_bpf_hotspot_samples_omitted_by_limit,
+                            under_omitted_by_limit,
                             total_samples=program.kernel_samples,
                             total_cpu_percent=program.kernel_cpu_percent,
                         ),
@@ -348,19 +361,33 @@ def _profile_program_row(
     return row
 
 
-def _profile_kernel_hotspot_row(hotspot: BpfKernelHotspot, *, wide: bool) -> dict[str, str]:
+def _profile_kernel_hotspot_row(
+    hotspot: BpfKernelHotspot,
+    *,
+    wide: bool,
+    kernel_ip_detail: bool,
+) -> dict[str, str]:
     row = {"SAMPLES": str(hotspot.samples)}
     row["CPU%"] = f"{hotspot.cpu_percent:.4f}"
     row["KIND"] = hotspot.symbol_kind
-    row["SYMBOL"] = hotspot.symbol or "-"
+    symbol = hotspot.symbol or "-"
+    if kernel_ip_detail and hotspot.symbol_offset:
+        symbol = f"{symbol}+0x{hotspot.symbol_offset:x}"
+    elif not kernel_ip_detail and hotspot.ip_count > 1:
+        symbol = f"{symbol} ({hotspot.ip_count} IPs)"
+    row["SYMBOL"] = symbol
     row["MODULE"] = hotspot.module or "-"
     if wide:
-        row["IP"] = f"0x{hotspot.ip:x}"
+        row["IP"] = f"0x{hotspot.ip:x}" if kernel_ip_detail else "-"
         row["SYMBOL_OFF"] = (
-            f"0x{hotspot.symbol_offset:x}" if hotspot.symbol_offset is not None else "-"
+            f"0x{hotspot.symbol_offset:x}"
+            if kernel_ip_detail and hotspot.symbol_offset is not None
+            else "-"
         )
         row["BPF_JIT_ADDR"] = (
-            f"0x{hotspot.bpf_jited_address:x}" if hotspot.bpf_jited_address is not None else "-"
+            f"0x{hotspot.bpf_jited_address:x}"
+            if kernel_ip_detail and hotspot.bpf_jited_address is not None
+            else "-"
         )
     row["BPF_FILE"] = _profile_file_name(hotspot.bpf_file_name, wide=wide)
     row["BPF_LINE"] = str(hotspot.bpf_line_number) if hotspot.bpf_line_number is not None else "-"

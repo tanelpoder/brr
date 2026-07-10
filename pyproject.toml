@@ -1,6 +1,6 @@
 [project]
 name = "brr"
-version = "0.5.0"
+version = "0.5.1"
 description = "eBPF Runtime Reporter and Profiler by Tanel Poder (tanelpoder.com)."
 readme = "README.md"
 requires-python = ">=3.11"

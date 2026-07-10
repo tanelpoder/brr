@@ -30,13 +30,6 @@ does not shell out to `perf`.
 
 ![](docs/images/ebpf-spinlock.png)
 
-
-
-
-
-
-
-
 ## Output
 
 Program listing (`brr list`):
@@ -69,7 +62,7 @@ sudo brr --csv map
 
 ## Install
 
-### From source with uv
+### Run from a source checkout with uv
 
 Requires Linux, Python 3.11 or newer, and `uv`.
 
@@ -77,10 +70,16 @@ Requires Linux, Python 3.11 or newer, and `uv`.
 git clone https://github.com/tanelpoder/brr.git
 cd brr
 uv sync
+sudo env PATH="$PATH" uv run brr list
 sudo env PATH="$PATH" uv run brr
+sudo env PATH="$PATH" uv run brr profile --kernel-samples
 ```
 
-To install a local command from the checkout:
+Run these commands from the checkout. Preserving `PATH` lets `sudo` find the
+user-installed `uv`; `uv run` then uses the checkout's managed environment.
+
+To install `brr` as a user-local command instead of running through the
+checkout:
 
 ```bash
 uv tool install .
@@ -92,13 +91,13 @@ sudo env PATH="$PATH" brr
 Download the DEB for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo dpkg -i brr_0.5.0-1_amd64.deb
+sudo dpkg -i brr_0.5.1-1_amd64.deb
 ```
 
 On ARM64:
 
 ```bash
-sudo dpkg -i brr_0.5.0-1_arm64.deb
+sudo dpkg -i brr_0.5.1-1_arm64.deb
 ```
 
 ### Fedora, RHEL, or compatible RPM systems
@@ -106,13 +105,13 @@ sudo dpkg -i brr_0.5.0-1_arm64.deb
 Download the RPM for your architecture from the GitHub release, then install it:
 
 ```bash
-sudo rpm -Uvh brr-0.5.0-1.x86_64.rpm
+sudo rpm -Uvh brr-0.5.1-1.x86_64.rpm
 ```
 
 On AArch64:
 
 ```bash
-sudo rpm -Uvh brr-0.5.0-1.aarch64.rpm
+sudo rpm -Uvh brr-0.5.1-1.aarch64.rpm
 ```
 
 The packaged command installs as `/usr/bin/brr` and contains a standalone
@@ -174,6 +173,14 @@ completed sampling window, so newly loaded programs appear without restarting
 `brr`. Refresh is intentionally paused while a program inspect/profile view is
 open; press `Esc` to return to the live table.
 
+In a drilldown, `e`/`c` expand and collapse source folds or helper children
+without moving the selected branch within the viewport. Kernel/helper samples
+are grouped by function and BPF caller line by default; `i` toggles exact IP and
+`+0x...` offset rows without resampling. Source mapping markers moved to `m`,
+with their legend on `M`. Press `h` for drilldown-specific help; this local help
+lists only keys that apply to the inspect/profile window, and `h` or `Esc`
+returns to the drilldown. Outside a drilldown, `h` retains the main TUI help.
+
 Inspect a program by ID:
 
 ```bash
@@ -188,6 +195,8 @@ Profile BPF JIT CPU samples:
 
 ```bash
 sudo brr profile --duration 5 --event auto
+sudo brr profile --kernel-samples
+sudo brr profile --kernel-samples --kernel-ip-detail
 ```
 
 `brr` drains each per-CPU perf mmap ring continuously while profiling. Ring
@@ -208,7 +217,7 @@ time, kernel loss/throttle records, parser discards, and warnings. With
 but the command exits with status 1. JSON and CSV include the same capture
 telemetry for automation.
 
-Profiled inspect drilldowns label row counts as `SAMPLES` and show `%THIS`, the
+Profiled inspect drilldowns show `%THIS` followed by `SAMPLES`; `%THIS` is the
 row's contribution to this selected program's inclusive sampled total. Source,
 instruction, and helper/kernel percentages are non-overlapping and add to
 exactly 100.00%. `--line-limit` limits detailed direct and kernel/helper hotspot
@@ -219,6 +228,13 @@ to display every hotspot. Standalone `brr profile` and profiled textmode default
 to 10 detailed hotspots per direct/under bucket. The interactive TUI defaults
 to unlimited hotspots so its drilldown does not hide any samples; an explicit
 `brr top --line-limit N` still overrides that default.
+
+Human-readable kernel/helper output groups sampled offsets into complete
+function totals at each BPF caller line before applying `--line-limit`; a row
+adds `(N IPs)` when multiple sampled instructions contributed. Add
+`--kernel-ip-detail` to `brr profile` or `brr top` for exact IP rows initially.
+In the TUI, `i` switches between the two views at any time. JSON and CSV remain
+exact-IP output regardless of this presentation option.
 
 The compact drilldown header reports the program's total sampled CPU split into
 eBPF code, activity under eBPF in helpers or other kernel functions, and any
@@ -266,29 +282,10 @@ List perf events that `brr` can open on the current host:
 sudo brr perf-events
 ```
 
-If `brr` is installed in a user-local path and you run it with `sudo`, preserve
-your `PATH`:
+## Packaging
 
-```bash
-sudo env PATH="$PATH" brr
-```
-
-## Build Release Artifacts
-
-Release artifacts are built locally from the current checkout. The standalone
-binary is native to the build machine, so build on each target architecture.
-
-```bash
-uv sync --group dev --group package
-uv run --group package python scripts/build_release.py --all
-```
-
-Artifacts are written to `dist/release/`:
-
-- `brr-0.5.0-linux-<arch>`
-- `brr_0.5.0-1_<deb-arch>.deb`
-- `brr-0.5.0-1.<rpm-arch>.rpm`
-- `SHA256SUMS`
+See [PACKAGING.md](PACKAGING.md) for native release-build and package
+verification instructions.
 
 ## Notes
 

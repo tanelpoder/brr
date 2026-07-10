@@ -53,7 +53,7 @@ def package_version() -> str:
     try:
         return version("brr")
     except PackageNotFoundError:
-        return "0.5.0"
+        return "0.5.1"
 
 
 def _positive_float(value: str) -> float:
@@ -114,6 +114,8 @@ def _validate_call_graph_args(parser: argparse.ArgumentParser, args: argparse.Na
     kernel_samples = getattr(args, "kernel_samples", False)
     if call_graph == "lbr" and not kernel_samples:
         parser.error("--call-graph lbr requires --kernel-samples")
+    if getattr(args, "kernel_ip_detail", False) and not kernel_samples:
+        parser.error("--kernel-ip-detail requires --kernel-samples")
 
 
 def _validate_top_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -414,6 +416,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     profile_parser.add_argument(
+        "--kernel-ip-detail",
+        action="store_true",
+        help=(
+            "In human output, show separate kernel/helper rows for exact sampled IPs "
+            "instead of grouping offsets by function."
+        ),
+    )
+    profile_parser.add_argument(
         "--call-graph",
         choices=CALL_GRAPH_MODES,
         default="fp",
@@ -637,6 +647,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         profile,
                         wide=args.wide,
                         extended=args.extended,
+                        kernel_ip_detail=args.kernel_ip_detail,
                         source_context_by_program=source_context_by_program,
                     )
                 )

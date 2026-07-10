@@ -86,6 +86,8 @@ def test_inspect_samples_and_this_percent_rendering() -> None:
     assert "%THIS" in text
     assert "%PROG" not in text
     assert "WEIGHT" not in text
+    table_header = next(line for line in text.splitlines() if "%THIS" in line and "SAMPLES" in line)
+    assert table_header.index("%THIS") < table_header.index("SAMPLES") < table_header.index("CODE")
     assert not any("60" in line and "parent source" in line for line in text.splitlines())
     assert any("40.00" in line and "direct instruction" in line for line in text.splitlines())
     assert any("20.00" in line and "helper child" in line for line in text.splitlines())
@@ -187,6 +189,77 @@ def test_source_parent_and_helper_samples_do_not_overlap() -> None:
         ("kernel", 20),
     ]
     assert [row.attribution for row in report.rows] == ["direct", "under"]
+
+
+def test_kernel_function_rows_hide_offsets_until_ip_detail_is_enabled() -> None:
+    source = BpfSourceLine("sample.bpf.c", 10, 2, "call helper;")
+    dump = BpfProgramDump(
+        program=_program(),
+        instructions=[BpfInstruction(0, "95000000", 0x95, 0, 0, 0, 0, source)],
+        line_info_count=1,
+    )
+    raw_hotspots = [
+        BpfKernelHotspot(
+            samples=3,
+            sample_percent=60,
+            cpu_percent=3,
+            ip=0x5001,
+            symbol="bpf_task_storage_get",
+            symbol_offset=1,
+            symbol_kind="bpf_helper",
+            bpf_file_name=source.file_name,
+            bpf_line_number=source.line_number,
+            bpf_source=source.source,
+        ),
+        BpfKernelHotspot(
+            samples=2,
+            sample_percent=40,
+            cpu_percent=2,
+            ip=0x5002,
+            symbol="bpf_task_storage_get",
+            symbol_offset=2,
+            symbol_kind="bpf_helper",
+            bpf_file_name=source.file_name,
+            bpf_line_number=source.line_number,
+            bpf_source=source.source,
+        ),
+    ]
+    function_hotspot = BpfKernelHotspot(
+        samples=5,
+        sample_percent=100,
+        cpu_percent=5,
+        ip=0x5001,
+        symbol="bpf_task_storage_get",
+        symbol_kind="bpf_helper",
+        bpf_file_name=source.file_name,
+        bpf_line_number=source.line_number,
+        bpf_source=source.source,
+        ip_count=2,
+    )
+
+    collapsed = build_inspect_report(
+        dump,
+        mode="source",
+        hotspots=[],
+        kernel_hotspots=[function_hotspot],
+    )
+    detailed = build_inspect_report(
+        dump,
+        mode="source",
+        hotspots=[],
+        kernel_hotspots=raw_hotspots,
+        kernel_ip_detail=True,
+    )
+
+    collapsed_children = [row for row in collapsed.rows if row.kind == "kernel"]
+    detailed_children = [row for row in detailed.rows if row.kind == "kernel"]
+    assert len(collapsed_children) == 1
+    assert collapsed_children[0].samples == 5
+    assert "bpf_task_storage_get (2 IPs)" in collapsed_children[0].code
+    assert "+0x" not in collapsed_children[0].code
+    assert [row.samples for row in detailed_children] == [3, 2]
+    assert "+0x1" in detailed_children[0].code
+    assert "+0x2" in detailed_children[1].code
 
 
 def test_mixed_view_uses_translated_instruction_offset_for_hotspots() -> None:

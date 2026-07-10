@@ -67,6 +67,7 @@ class BrrInspectRow:
     offset: int | None = None
     markers: tuple[str, ...] = ()
     child_key: str | None = None
+    kernel_function_key: str | None = None
     has_children: bool = False
     children_expanded: bool = True
     attribution: InspectAttribution = "none"
@@ -99,6 +100,7 @@ class BrrInspectReport:
     profile: BpfProfile | None = None
     profile_program: BpfProfileProgram | None = None
     instruction_source: str = "internal"
+    kernel_ip_detail: bool = False
     source_limit: int | None = None
     source_limit_omitted_direct_samples: int = 0
     source_limit_omitted_under_bpf_samples: int = 0
@@ -244,20 +246,28 @@ def _attribution_summary_rows(
         attribution="under",
         code="under-eBPF samples without BPF caller source metadata",
     )
+    retained_kernel_hotspots = (
+        program.kernel_hotspots if report.kernel_ip_detail else program.kernel_function_hotspots
+    )
     retained_under_unmapped = sum(
         hotspot.samples
-        for hotspot in program.kernel_hotspots
+        for hotspot in retained_kernel_hotspots
         if hotspot.bpf_instruction_offset is None
     )
     omitted_under_unmapped = max(
         0,
         program.under_bpf_caller_source_unmapped_samples - retained_under_unmapped,
     )
+    under_omitted_by_limit = (
+        program.under_bpf_hotspot_samples_omitted_by_limit
+        if report.kernel_ip_detail
+        else program.under_bpf_function_samples_omitted_by_limit
+    )
     under_limited = max(
         0,
-        program.under_bpf_hotspot_samples_omitted_by_limit
+        under_omitted_by_limit
         - min(
-            program.under_bpf_hotspot_samples_omitted_by_limit,
+            under_omitted_by_limit,
             omitted_under_unmapped,
         ),
     )
@@ -339,6 +349,7 @@ def limit_inspect_report_source_rows(
         profile=report.profile,
         profile_program=report.profile_program,
         instruction_source=report.instruction_source,
+        kernel_ip_detail=report.kernel_ip_detail,
         source_limit=limit,
         source_limit_omitted_direct_samples=sum(
             row.samples for row in omitted_rows if row.attribution == "direct"
@@ -385,6 +396,7 @@ def with_inspect_marker(row: BrrInspectRow, marker: str) -> BrrInspectRow:
         offset=row.offset,
         markers=tuple(item for item in _marker_order() if item in marker_set),
         child_key=row.child_key,
+        kernel_function_key=row.kernel_function_key,
         has_children=row.has_children,
         children_expanded=row.children_expanded,
         attribution=row.attribution,
@@ -442,6 +454,7 @@ def collect_inspect_report(
     frequency: int,
     line_limit: int,
     kernel_samples: bool = False,
+    kernel_ip_detail: bool = False,
     call_graph: CallGraphMode = "fp",
     perf_buffer_pages: int | None = None,
     perf_drain_ms: int | None = None,
@@ -466,13 +479,19 @@ def collect_inspect_report(
         )
         profile_program = profile_result.items[0] if profile_result.items else None
         hotspots = profile_program.hotspots if profile_program is not None else []
-        kernel_hotspots = profile_program.kernel_hotspots if profile_program is not None else []
+        if profile_program is not None:
+            kernel_hotspots = (
+                profile_program.kernel_hotspots
+                if kernel_ip_detail
+                else profile_program.kernel_function_hotspots
+            )
 
     report = build_inspect_report(
         dump,
         mode=mode,
         hotspots=hotspots,
         kernel_hotspots=kernel_hotspots,
+        kernel_ip_detail=kernel_ip_detail,
         bpftool_provider=bpftool_provider or collect_bpftool_xlated,
     )
     return BrrInspectReport(
@@ -482,6 +501,7 @@ def collect_inspect_report(
         profile=profile_result,
         profile_program=profile_program,
         instruction_source=report.instruction_source,
+        kernel_ip_detail=kernel_ip_detail,
     )
 
 
@@ -491,10 +511,14 @@ def build_inspect_report(
     mode: InspectMode,
     hotspots: list[BpfHotspot],
     kernel_hotspots: list[BpfKernelHotspot] | None = None,
+    kernel_ip_detail: bool = False,
     bpftool_provider: BpftoolProvider | None = None,
 ) -> BrrInspectReport:
     kernel_hotspots = kernel_hotspots or []
-    kernel_children = _kernel_children_by_source(kernel_hotspots)
+    kernel_children = _kernel_children_by_source(
+        kernel_hotspots,
+        kernel_ip_detail=kernel_ip_detail,
+    )
     source_lines = annotate_instruction_source_lines(
         dump.program.id,
         dump.instructions,
@@ -580,6 +604,8 @@ def profile_metadata_for_empty(
 
 def _kernel_children_by_source(
     kernel_hotspots: list[BpfKernelHotspot],
+    *,
+    kernel_ip_detail: bool,
 ) -> dict[tuple[str | None, int | None, str | None], list[BrrInspectRow]]:
     children: dict[tuple[str | None, int | None, str | None], list[BrrInspectRow]] = {}
     for hotspot in kernel_hotspots:
@@ -587,7 +613,7 @@ def _kernel_children_by_source(
         children.setdefault(key, []).append(
             BrrInspectRow(
                 kind="kernel",
-                code=_format_kernel_child(hotspot),
+                code=_format_kernel_child(hotspot, kernel_ip_detail=kernel_ip_detail),
                 samples=hotspot.samples,
                 sample_percent=hotspot.sample_percent,
                 cpu_percent=hotspot.cpu_percent,
@@ -596,18 +622,39 @@ def _kernel_children_by_source(
                 column=hotspot.bpf_column,
                 offset=None,
                 child_key=_child_key(key),
+                kernel_function_key=_kernel_function_key(hotspot),
                 attribution="under",
             )
         )
     return children
 
 
-def _format_kernel_child(hotspot: BpfKernelHotspot) -> str:
+def _format_kernel_child(
+    hotspot: BpfKernelHotspot,
+    *,
+    kernel_ip_detail: bool,
+) -> str:
     symbol = hotspot.symbol or f"0x{hotspot.ip:x}"
-    if hotspot.symbol_offset:
+    if kernel_ip_detail and hotspot.symbol_offset:
         symbol = f"{symbol}+0x{hotspot.symbol_offset:x}"
+    elif not kernel_ip_detail and hotspot.ip_count > 1:
+        symbol = f"{symbol} ({hotspot.ip_count} IPs)"
     module = f" [{hotspot.module}]" if hotspot.module else ""
     return f"  -> {hotspot.symbol_kind} {symbol}{module}"
+
+
+def _kernel_function_key(hotspot: BpfKernelHotspot) -> str:
+    symbol = hotspot.symbol or f"0x{hotspot.ip:x}"
+    return "\0".join(
+        (
+            hotspot.symbol_kind,
+            symbol,
+            hotspot.module or "",
+            hotspot.bpf_file_name or "",
+            str(hotspot.bpf_line_number or ""),
+            hotspot.bpf_source or "",
+        )
+    )
 
 
 def _source_rows(

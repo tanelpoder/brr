@@ -45,11 +45,30 @@ def _profile() -> BpfProfile:
                 sample_percent=36.92,
                 cpu_percent=24,
                 ip=0x2000,
+                symbol="bpf_task_storage_get",
+                symbol_offset=0x20,
+                symbol_kind="bpf_helper",
                 bpf_jited_address=0x1000,
                 bpf_instruction_offset=24,
                 bpf_file_name="sample.bpf.c",
                 bpf_line_number=10,
                 bpf_source="direct",
+            )
+        ],
+        kernel_function_hotspots=[
+            BpfKernelHotspot(
+                samples=65,
+                sample_percent=100,
+                cpu_percent=65,
+                ip=0x2000,
+                symbol="bpf_task_storage_get",
+                symbol_kind="bpf_helper",
+                bpf_jited_address=0x1000,
+                bpf_instruction_offset=24,
+                bpf_file_name="sample.bpf.c",
+                bpf_line_number=10,
+                bpf_source="direct",
+                ip_count=6,
             )
         ],
         direct_source_mapped_samples=19,
@@ -75,12 +94,17 @@ def _profile() -> BpfProfile:
 
 def test_profile_text_reports_direct_and_under_limit_aggregates() -> None:
     rendered = render_profile(_profile())
+    detailed = render_profile(_profile(), kernel_ip_detail=True)
 
     assert "Other eBPF samples not shown (--line-limit=5)" in rendered
-    assert "Other under-eBPF samples not shown (--line-limit=5)" in rendered
+    assert "bpf_task_storage_get (6 IPs)" in rendered
+    assert "Other under-eBPF samples not shown" not in rendered
+    assert "Other under-eBPF samples not shown (--line-limit=5)" in detailed
+    assert "bpf_task_storage_get (6 IPs)" not in detailed
+    assert "bpf_task_storage_get+0x20" in detailed
     assert "Unaccounted samples" not in rendered
     assert any(line.strip().startswith("7 ") for line in rendered.splitlines())
-    assert any(line.strip().startswith("41 ") for line in rendered.splitlines())
+    assert any(line.strip().startswith("41 ") for line in detailed.splitlines())
 
 
 def test_profile_json_exposes_attribution_diagnostics_and_instruction_offsets() -> None:

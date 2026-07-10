@@ -96,11 +96,20 @@ eBPF program. A `+` in front of an eBPF code line indicates collapsed
 helper/kernel activity; use `e` and `c` to expand and collapse it. The compact
 header reports total sampled CPU (where 100% is one fully busy CPU) and splits
 it into all direct eBPF code, activity under eBPF, and only a genuine inclusive
-attribution mismatch. The `SAMPLES` and `%THIS` columns use non-overlapping
+attribution mismatch. The `%THIS` and `SAMPLES` columns use non-overlapping
 leaves and total exactly 100.00%. Detailed rows hidden by `--line-limit` or
 `--source-limit` remain attributed in `Other eBPF` and `Other under-eBPF` rows;
 they are never reported as unaccounted. Samples without source metadata also
 retain their known direct or under-eBPF CPU attribution.
+
+Kernel/helper offsets in the same resolved function and BPF caller line are
+grouped into one function row by default, with `(N IPs)` showing how many exact
+sampled addresses contributed. In the TUI, `i` toggles exact `function+0x...`
+rows without another capture; `m` toggles source markers and `M` opens their
+legend. Press `h` for inspect/profile-specific help; `h` or `Esc` closes it and
+returns to the drilldown. For standalone or textmode output, add
+`--kernel-ip-detail` alongside `--kernel-samples`. JSON and CSV always retain
+exact IP rows.
 
 Textmode drilldowns show expanded helper/kernel children by default. Use
 `brr top --textmode --profile-top --collapse-samples` to fold child activity
@@ -182,8 +191,7 @@ CPU%    KIND        SYMBOL           MODULE  BPF_FILE  BPF_LINE  BPF_SOURCE
 0.0802  kernel      read_tsc         -       main.c          63      u64 t = bpf_ktime_get_ns();
 0.0401  kernel      __pi_memcpy      -       main.c          65      return 0;                  
 0.0401  kernel      alloc_htab_elem  -       main.c          65      return 0;                  
-0.0201  bpf_helper  bpf_obj_memcpy   -       main.c          65      return 0;                  
-0.0201  bpf_helper  bpf_obj_memcpy   -       main.c          65      return 0;                  
+0.0402  bpf_helper  bpf_obj_memcpy (2 IPs)  -       main.c          65      return 0;
 
 Breakdown of program 178 (xcap_sys_exit):
 
@@ -194,10 +202,7 @@ CPU%    FILE           LINE  SOURCE
 Kernel/helper samples for program 178 (xcap_sys_exit):
 
 CPU%    KIND        SYMBOL                      MODULE  BPF_FILE       BPF_LINE  BPF_SOURCE                                                   
-0.0401  bpf_helper  bpf_task_storage_get_recur  -       syscall.bpf.c       274      storage = bpf_task_storage_get(&task_storage, task, NULL,
-0.0201  bpf_helper  bpf_task_storage_get_recur  -       syscall.bpf.c       274      storage = bpf_task_storage_get(&task_storage, task, NULL,
-0.0201  bpf_helper  bpf_task_storage_get_recur  -       syscall.bpf.c       274      storage = bpf_task_storage_get(&task_storage, task, NULL,
-0.0201  bpf_helper  bpf_task_storage_get_recur  -       syscall.bpf.c       274      storage = bpf_task_storage_get(&task_storage, task, NULL,
+0.1004  bpf_helper  bpf_task_storage_get_recur (4 IPs)  -       syscall.bpf.c       274      storage = bpf_task_storage_get(&task_storage, task, NULL,
 
 Kernel/helper samples for program 181 (xcap_iorq_issue):
 

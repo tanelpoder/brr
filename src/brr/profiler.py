@@ -1238,6 +1238,13 @@ class ProfileAccumulator:
                 frequency=self.frequency,
                 line_limit=self.line_limit,
             )
+            kernel_function_hotspots = _kernel_function_hotspots_from_counts(
+                self.kernel_hotspot_counts[program_id],
+                program_kernel_samples=kernel_count,
+                duration=effective_duration,
+                frequency=self.frequency,
+                line_limit=self.line_limit,
+            )
             rows.append(
                 BpfProfileProgram(
                     id=program.id,
@@ -1260,6 +1267,7 @@ class ProfileAccumulator:
                         frequency=self.frequency,
                     ),
                     kernel_hotspots=kernel_hotspots,
+                    kernel_function_hotspots=kernel_function_hotspots,
                     inclusive_samples=count + kernel_count,
                     inclusive_cpu_percent=_cpu_percent(
                         count + kernel_count,
@@ -1279,6 +1287,10 @@ class ProfileAccumulator:
                     ),
                     under_bpf_hotspot_samples_omitted_by_limit=max(
                         0, kernel_count - sum(hotspot.samples for hotspot in kernel_hotspots)
+                    ),
+                    under_bpf_function_samples_omitted_by_limit=max(
+                        0,
+                        kernel_count - sum(hotspot.samples for hotspot in kernel_function_hotspots),
                     ),
                 )
             )
@@ -1756,6 +1768,17 @@ class KernelHotspotKey:
     bpf_source: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class KernelFunctionHotspotKey:
+    symbol: str | None
+    module: str | None
+    symbol_kind: str
+    unknown_ip: int | None
+    bpf_file_name: str | None
+    bpf_line_number: int | None
+    bpf_source: str | None
+
+
 def _hotspot_key(line_info: BpfLineInfo | None) -> HotspotKey:
     if line_info is None:
         return HotspotKey(None, None, None, None, None, None)
@@ -1894,6 +1917,73 @@ def _kernel_hotspots_from_counts(
             bpf_line_number=key.bpf_line_number,
             bpf_column=key.bpf_column,
             bpf_source=key.bpf_source,
+        )
+        for key, count in ordered
+    ]
+
+
+def _kernel_function_hotspots_from_counts(
+    counts: Counter[KernelHotspotKey],
+    *,
+    program_kernel_samples: int,
+    duration: float,
+    frequency: int,
+    line_limit: int,
+) -> list[BpfKernelHotspot]:
+    grouped_counts: Counter[KernelFunctionHotspotKey] = Counter()
+    grouped_ips: dict[KernelFunctionHotspotKey, set[int]] = defaultdict(set)
+    grouped_bpf_jited_addresses: dict[KernelFunctionHotspotKey, set[int]] = defaultdict(set)
+    grouped_bpf_instruction_offsets: dict[KernelFunctionHotspotKey, set[int]] = defaultdict(set)
+    grouped_bpf_columns: dict[KernelFunctionHotspotKey, set[int]] = defaultdict(set)
+    for key, count in counts.items():
+        function_key = KernelFunctionHotspotKey(
+            symbol=key.symbol,
+            module=key.module,
+            symbol_kind=key.symbol_kind,
+            unknown_ip=key.ip if key.symbol is None else None,
+            bpf_file_name=key.bpf_file_name,
+            bpf_line_number=key.bpf_line_number,
+            bpf_source=key.bpf_source,
+        )
+        grouped_counts[function_key] += count
+        grouped_ips[function_key].add(key.ip)
+        if key.bpf_jited_address is not None:
+            grouped_bpf_jited_addresses[function_key].add(key.bpf_jited_address)
+        if key.bpf_instruction_offset is not None:
+            grouped_bpf_instruction_offsets[function_key].add(key.bpf_instruction_offset)
+        if key.bpf_column is not None:
+            grouped_bpf_columns[function_key].add(key.bpf_column)
+
+    ordered = sorted(
+        grouped_counts.items(),
+        key=lambda item: (
+            -item[1],
+            item[0].symbol or "",
+            item[0].module or "",
+            item[0].unknown_ip or 0,
+            item[0].bpf_file_name or "",
+            item[0].bpf_line_number or 0,
+        ),
+    )
+    if line_limit > 0:
+        ordered = ordered[:line_limit]
+    return [
+        BpfKernelHotspot(
+            samples=count,
+            sample_percent=_percent(count, program_kernel_samples),
+            cpu_percent=_cpu_percent(count, duration=duration, frequency=frequency),
+            ip=min(grouped_ips[key]),
+            symbol=key.symbol,
+            module=key.module,
+            symbol_offset=None,
+            symbol_kind=key.symbol_kind,
+            bpf_jited_address=min(grouped_bpf_jited_addresses[key], default=None),
+            bpf_instruction_offset=min(grouped_bpf_instruction_offsets[key], default=None),
+            bpf_file_name=key.bpf_file_name,
+            bpf_line_number=key.bpf_line_number,
+            bpf_column=min(grouped_bpf_columns[key], default=None),
+            bpf_source=key.bpf_source,
+            ip_count=len(grouped_ips[key]),
         )
         for key, count in ordered
     ]

@@ -79,11 +79,14 @@ def _render_profile_section(report: BrrDetailReport, *, extended: bool = False) 
         sections.append(
             _render_table([_hotspot_row(hotspot) for hotspot in report.profile_program.hotspots])
         )
-    if report.profile_program.kernel_hotspots:
+    if report.profile_program.kernel_function_hotspots:
         sections.append("Kernel/helper samples")
         sections.append(
             _render_table(
-                [_kernel_hotspot_row(hotspot) for hotspot in report.profile_program.kernel_hotspots]
+                [
+                    _kernel_hotspot_row(hotspot)
+                    for hotspot in report.profile_program.kernel_function_hotspots
+                ]
             )
         )
     return "\n".join(sections)
@@ -157,11 +160,14 @@ def _hotspot_row(hotspot: BpfHotspot) -> dict[str, str]:
 
 
 def _kernel_hotspot_row(hotspot: BpfKernelHotspot) -> dict[str, str]:
+    symbol = hotspot.symbol or "-"
+    if hotspot.ip_count > 1:
+        symbol = f"{symbol} ({hotspot.ip_count} IPs)"
     return {
         "SAMPLES": str(hotspot.samples),
         "CPU%": f"{hotspot.cpu_percent:.4f}",
         "KIND": hotspot.symbol_kind,
-        "SYMBOL": hotspot.symbol or "-",
+        "SYMBOL": symbol,
         "MODULE": hotspot.module or "-",
         "BPF_FILE": _file_name(hotspot.bpf_file_name),
         "BPF_LINE": (str(hotspot.bpf_line_number) if hotspot.bpf_line_number is not None else "-"),
@@ -229,8 +235,8 @@ def _inspect_row(
     children_expanded: bool | None,
 ) -> dict[str, str]:
     return {
-        "SAMPLES": str(samples) if samples > 0 else "",
         "%THIS": f"{basis_points / 100:.2f}" if basis_points is not None else "",
+        "SAMPLES": str(samples) if samples > 0 else "",
         "CODE": row.display_code(children_expanded=children_expanded),
     }
 
