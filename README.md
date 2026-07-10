@@ -99,7 +99,7 @@ ID  TYPE     NAME          XLATED_BYTES  JITED_BYTES  RUN_CNT_DELTA  RUN_TIME_NS
 
 Use `-x` or `--extended` to include extra columns such as `TAG` and `PINNED`.
 Use `-c` or `--cumulative` with `activity` and `top` to include cumulative
-runtime metrics.
+runtime metrics and the `NS_PER/s` rate.
 
 JSON and CSV output are available for scripting:
 

@@ -69,8 +69,7 @@ def render_program_activity(
         }
         if cumulative:
             row["CUMUL_AVG_NS"] = str(activity.cumulative_avg_run_time_ns)
-        row["NS_PER/s"] = str(_rate_per_second(activity.run_time_ns_delta, duration=duration))
-        if cumulative:
+            row["NS_PER/s"] = str(_rate_per_second(activity.run_time_ns_delta, duration=duration))
             row["EXECS_DELTA"] = str(activity.run_count_delta)
             row["TOTAL_NS"] = str(activity.run_time_ns_delta)
             row["EXECS_TOTAL"] = str(activity.run_count_total)

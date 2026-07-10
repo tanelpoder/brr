@@ -7,15 +7,15 @@ List top eBPF program runtime/overhead, program executions/s and avg program/pro
 ```
 $ sudo brr activity
 
- ID  TYPE        NAME             CPU%     EXECS/s  AVG_NS  NS_PER/s   XLAT_B  JIT_B
-206  tracepoint  raw_syscalls__s  19.8829  1516573     131  198829397     392    234
-205  tracepoint  raw_syscalls__s  19.1351  1516524     126  191350855     112     73
-177  tracing     xcap_sys_enter   18.6948  1516537     123  186947636     496    338
-174  tracing     get_tasks         8.2631   173190     477   82630615   52800  38147
-178  tracing     xcap_sys_exit     8.0269  1516583      52   80268842    1384    928
-181  tracing     xcap_iorq_issue   1.0998    83264     132   10997533     552    317
-182  tracing     xcap_iorq_compl   0.8170    83264      98    8170407    1448    779
-180  tracing     xcap_iorq_inser   0.0044      112     388      43566     424    250
+ ID  TYPE        NAME             CPU%     EXECS/s  AVG_NS  XLAT_B  JIT_B
+206  tracepoint  raw_syscalls__s  19.8829  1516573     131     392    234
+205  tracepoint  raw_syscalls__s  19.1351  1516524     126     112     73
+177  tracing     xcap_sys_enter   18.6948  1516537     123     496    338
+174  tracing     get_tasks         8.2631   173190     477   52800  38147
+178  tracing     xcap_sys_exit     8.0269  1516583      52    1384    928
+181  tracing     xcap_iorq_issue   1.0998    83264     132     552    317
+182  tracing     xcap_iorq_compl   0.8170    83264      98    1448    779
+180  tracing     xcap_iorq_inser   0.0044      112     388     424    250
 ```
 
 Just like the `brr top` "p" - profile command in TUI, you can run `brr profile` for drilling down into which eBPF program lines were most active. This relies on whatever perf events are available on your platform/VM (like hardware PMU CPU "cycles" vs software timer based "cpu-clock"). You can list the available perf events using `brr perf-events` (defaults to HW CPU "cycles" when available):

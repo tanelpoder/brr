@@ -117,8 +117,7 @@ def _activity_row(
     }
     if cumulative:
         row["CUMUL_AVG_NS"] = _format_int(activity.cumulative_avg_run_time_ns)
-    row["NS_PER/s"] = _format_rate(activity.run_time_ns_delta, duration=duration)
-    if cumulative:
+        row["NS_PER/s"] = _format_rate(activity.run_time_ns_delta, duration=duration)
         row["EXECS_DELTA"] = _format_int(activity.run_count_delta)
         row["TOTAL_NS"] = _format_int(activity.run_time_ns_delta)
         row["EXECS_TOTAL"] = _format_int(activity.run_count_total)
