@@ -64,6 +64,29 @@ EXTENDED_TOP_COLUMNS = {"TAG", "PINNED"}
 TEXTUAL_DARK_THEME = "textual-dark"
 TEXTUAL_LIGHT_THEME = "textual-light"
 KNOWN_256_COLOR_TERMS = {"ghostty", "xterm-ghostty"}
+TOP_ARGUMENT_DEFAULTS = {
+    "delay": 1.0,
+    "limit": 20,
+    "include_all": False,
+    "event": "auto",
+    "profile_duration": 5.0,
+    "frequency": 997,
+    "line_limit": None,
+    "source_limit": 0,
+    "textmode": False,
+    "profile_top": False,
+    "collapse_samples": False,
+    "kernel_samples": False,
+    "kernel_ip_detail": False,
+    "call_graph": "fp",
+    "program_id": None,
+    "inspect_mode": "source",
+    "light": False,
+    "devmode": None,
+    "perf_buffer_pages": None,
+    "perf_drain_ms": None,
+    "fail_on_loss": False,
+}
 PROFILE_OPTION_INPUT_ORDER = (
     "profile-duration",
     "profile-frequency",
@@ -473,20 +496,33 @@ def _configure_textual_color_system(
         env["TEXTUAL_COLOR_SYSTEM"] = "256"
 
 
-def add_top_arguments(parser: argparse.ArgumentParser) -> None:
+def add_top_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    dest_prefix: str = "",
+    suppress_defaults: bool = False,
+    include_common: bool = True,
+) -> None:
+    def dest(name: str) -> str:
+        return f"{dest_prefix}{name}"
+
+    def default(value: object) -> object:
+        return argparse.SUPPRESS if suppress_defaults else value
+
     parser.add_argument(
         "-d",
         "--delay",
-        dest="delay",
+        dest=dest("delay"),
         type=_positive_float,
-        default=1.0,
+        default=default(TOP_ARGUMENT_DEFAULTS["delay"]),
         metavar="SECONDS",
         help="Run duration of refresh delay in seconds. Default: 1.",
     )
     parser.add_argument(
         "--limit",
+        dest=dest("limit"),
         type=_non_negative_int,
-        default=20,
+        default=default(TOP_ARGUMENT_DEFAULTS["limit"]),
         metavar="N",
         help=(
             "Maximum rows to show in --textmode snapshots. "
@@ -496,34 +532,40 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--all",
         action="store_true",
-        dest="include_all",
+        dest=dest("include_all"),
+        default=default(TOP_ARGUMENT_DEFAULTS["include_all"]),
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--event",
+        dest=dest("event"),
         type=_perf_event_name,
-        default="auto",
+        default=default(TOP_ARGUMENT_DEFAULTS["event"]),
+        metavar="EVENT",
         help="Perf event to sample for drill-down. Default: auto.",
     )
     parser.add_argument(
         "--profile-duration",
+        dest=dest("profile_duration"),
         type=_positive_float,
-        default=5.0,
+        default=default(TOP_ARGUMENT_DEFAULTS["profile_duration"]),
         metavar="SECONDS",
         help="Seconds to profile a selected program. Default: 5.",
     )
     parser.add_argument(
         "-F",
         "--frequency",
+        dest=dest("frequency"),
         type=_positive_int,
-        default=997,
+        default=default(TOP_ARGUMENT_DEFAULTS["frequency"]),
         metavar="HZ",
         help="Perf sample frequency in Hz for drill-down. Default: 997.",
     )
     parser.add_argument(
         "--line-limit",
+        dest=dest("line_limit"),
         type=_non_negative_int,
-        default=None,
+        default=default(TOP_ARGUMENT_DEFAULTS["line_limit"]),
         metavar="N",
         help=(
             "Maximum detailed hotspot rows per selected program; omitted samples remain "
@@ -533,8 +575,9 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--source-limit",
+        dest=dest("source_limit"),
         type=_non_negative_int,
-        default=0,
+        default=default(TOP_ARGUMENT_DEFAULTS["source_limit"]),
         metavar="N",
         help=(
             "Maximum detailed inspect rows in textmode output; omitted samples "
@@ -543,39 +586,50 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--textmode",
+        dest=dest("textmode"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["textmode"]),
         help="Print one deterministic report snapshot and exit.",
     )
     parser.add_argument(
         "--profile-top",
+        dest=dest("profile_top"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["profile_top"]),
         help="In textmode, append a profile/source drill-down for the top activity row.",
     )
     parser.add_argument(
         "--collapse-samples",
+        dest=dest("collapse_samples"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["collapse_samples"]),
         help=(
             "In a profiled textmode drill-down, fold helper/kernel samples into "
             "their calling eBPF row."
         ),
     )
-    parser.add_argument(
-        "-x",
-        "--extended",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Show extended TAG and PINNED columns.",
-    )
-    parser.add_argument(
-        "-c",
-        "--cumulative",
-        action="store_true",
-        default=argparse.SUPPRESS,
-        help="Show cumulative runtime metric columns.",
-    )
+    if include_common:
+        parser.add_argument(
+            "-x",
+            "--extended",
+            dest=dest("extended"),
+            action="store_true",
+            default=default(False),
+            help="Show extended TAG and PINNED columns.",
+        )
+        parser.add_argument(
+            "-c",
+            "--cumulative",
+            dest=dest("cumulative"),
+            action="store_true",
+            default=default(False),
+            help="Show cumulative runtime metric columns.",
+        )
     parser.add_argument(
         "--kernel-samples",
+        dest=dest("kernel_samples"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["kernel_samples"]),
         help=(
             "In profile drill-downs, capture perf callchains and show attributed "
             "kernel/helper samples."
@@ -583,7 +637,9 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--kernel-ip-detail",
+        dest=dest("kernel_ip_detail"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["kernel_ip_detail"]),
         help=(
             "Start human profile output with separate kernel/helper rows for exact "
             "sampled IPs instead of function groups."
@@ -591,31 +647,39 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--call-graph",
+        dest=dest("call_graph"),
         choices=CALL_GRAPH_MODES,
-        default="fp",
+        default=default(TOP_ARGUMENT_DEFAULTS["call_graph"]),
         help="Perf call graph mode for --kernel-samples profile drill-downs. Default: fp.",
     )
     parser.add_argument(
         "--program-id",
+        dest=dest("program_id"),
         type=_positive_int,
+        default=default(TOP_ARGUMENT_DEFAULTS["program_id"]),
         metavar="PROG_ID",
         help="In textmode, append a profile/source drill-down for this program ID.",
     )
     parser.add_argument(
         "--inspect-mode",
+        dest=dest("inspect_mode"),
         choices=("source", "mixed"),
-        default="source",
+        default=default(TOP_ARGUMENT_DEFAULTS["inspect_mode"]),
         help="In textmode, choose source-only or mixed source/instruction inspect output.",
     )
     parser.add_argument(
         "--light",
+        dest=dest("light"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["light"]),
         help="Start the interactive TUI with Textual's light theme.",
     )
     parser.add_argument(
         "--devmode",
+        dest=dest("devmode"),
         nargs="?",
         const=True,
+        default=default(TOP_ARGUMENT_DEFAULTS["devmode"]),
         metavar="DIR",
         help=(
             "Read matching source files from DIR to fill missing source lines. "
@@ -624,54 +688,70 @@ def add_top_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--perf-buffer-pages",
+        dest=dest("perf_buffer_pages"),
         type=_auto_power_of_two,
-        default=None,
+        default=default(TOP_ARGUMENT_DEFAULTS["perf_buffer_pages"]),
         metavar="auto|PAGES",
         help="Per-CPU perf data pages as a power of two. Default: auto.",
     )
     parser.add_argument(
         "--perf-drain-ms",
+        dest=dest("perf_drain_ms"),
         type=_auto_positive_int,
-        default=None,
+        default=default(TOP_ARGUMENT_DEFAULTS["perf_drain_ms"]),
         metavar="auto|MS",
         help="Maximum milliseconds between full perf ring sweeps. Default: auto.",
     )
     parser.add_argument(
         "--fail-on-loss",
+        dest=dest("fail_on_loss"),
         action="store_true",
+        default=default(TOP_ARGUMENT_DEFAULTS["fail_on_loss"]),
         help="In profiled textmode output, exit with status 1 if capture is incomplete.",
     )
 
 
 def config_from_args(args: argparse.Namespace, *, bpffs: str) -> BrrConfig:
     devdir = _devmode_dir(args)
-    line_limit = args.line_limit
+    line_limit = getattr(args, "line_limit", TOP_ARGUMENT_DEFAULTS["line_limit"])
     if line_limit is None:
-        line_limit = 10 if args.textmode else 0
+        line_limit = 10 if getattr(args, "textmode", False) else 0
     return BrrConfig(
         bpffs=bpffs,
-        delay=args.delay,
-        limit=args.limit,
+        delay=getattr(args, "delay", TOP_ARGUMENT_DEFAULTS["delay"]),
+        limit=getattr(args, "limit", TOP_ARGUMENT_DEFAULTS["limit"]),
         include_all=True,
-        event=args.event,
-        profile_duration=args.profile_duration,
-        frequency=args.frequency,
+        event=getattr(args, "event", TOP_ARGUMENT_DEFAULTS["event"]),
+        profile_duration=getattr(
+            args, "profile_duration", TOP_ARGUMENT_DEFAULTS["profile_duration"]
+        ),
+        frequency=getattr(args, "frequency", TOP_ARGUMENT_DEFAULTS["frequency"]),
         line_limit=line_limit,
-        source_limit=args.source_limit,
-        inspect_mode=args.inspect_mode,
-        theme=TEXTUAL_LIGHT_THEME if args.light else TEXTUAL_DARK_THEME,
+        source_limit=getattr(args, "source_limit", TOP_ARGUMENT_DEFAULTS["source_limit"]),
+        inspect_mode=getattr(args, "inspect_mode", TOP_ARGUMENT_DEFAULTS["inspect_mode"]),
+        theme=(
+            TEXTUAL_LIGHT_THEME
+            if getattr(args, "light", TOP_ARGUMENT_DEFAULTS["light"])
+            else TEXTUAL_DARK_THEME
+        ),
         devmode=devdir is not None,
         devdir=devdir,
         devmode_default_dir=getattr(args, "devmode", None) is True,
-        kernel_samples=args.kernel_samples,
-        call_graph=args.call_graph,
+        kernel_samples=getattr(args, "kernel_samples", TOP_ARGUMENT_DEFAULTS["kernel_samples"]),
+        call_graph=getattr(args, "call_graph", TOP_ARGUMENT_DEFAULTS["call_graph"]),
         extended=getattr(args, "extended", False),
         cumulative=getattr(args, "cumulative", False),
-        perf_buffer_pages=args.perf_buffer_pages,
-        perf_drain_ms=args.perf_drain_ms,
-        fail_on_loss=args.fail_on_loss,
-        collapse_samples=args.collapse_samples,
-        kernel_ip_detail=args.kernel_ip_detail,
+        perf_buffer_pages=getattr(
+            args, "perf_buffer_pages", TOP_ARGUMENT_DEFAULTS["perf_buffer_pages"]
+        ),
+        perf_drain_ms=getattr(args, "perf_drain_ms", TOP_ARGUMENT_DEFAULTS["perf_drain_ms"]),
+        fail_on_loss=getattr(args, "fail_on_loss", TOP_ARGUMENT_DEFAULTS["fail_on_loss"]),
+        collapse_samples=getattr(
+            args, "collapse_samples", TOP_ARGUMENT_DEFAULTS["collapse_samples"]
+        ),
+        kernel_ip_detail=getattr(
+            args, "kernel_ip_detail", TOP_ARGUMENT_DEFAULTS["kernel_ip_detail"]
+        ),
     )
 
 

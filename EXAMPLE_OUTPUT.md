@@ -1,5 +1,5 @@
 Other than the default **brr** TUI (also available as **brr top**), you can get
-regular tabular CLI output too, including JSON and CSV. Use **brr list** for the
+regular tabular CLI output too, including JSON and CSV. Use **brr prog** for the
 canonical loaded-program listing command.
 
 List top eBPF program runtime/overhead, program executions/s and avg program/probe run in nanoseconds:

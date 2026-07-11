@@ -4,7 +4,7 @@
 inspecting, and profiling loaded Linux eBPF objects.
 
 It is meant to feel like `ps` and `top` for eBPF. The default command opens the
-live top-style TUI; `brr list` prints one loaded eBPF program per row, and other
+live top-style TUI; `brr prog` prints one loaded eBPF program per row, and other
 subcommands show maps, links, BTF objects, runtime deltas, translated
 instructions, source metadata, and BPF JIT CPU samples.
 
@@ -80,7 +80,7 @@ make the displayed source-line order look unusual.
 
 ## Output
 
-Program listing (`brr list`):
+Program listing (`brr prog`):
 
 ```text
 ID  TYPE       NAME          XLATED_BYTES  JITED_BYTES
@@ -104,7 +104,7 @@ runtime metrics and the `NS_PER/s` rate.
 JSON and CSV output are available for scripting:
 
 ```bash
-sudo env PATH="$PATH" uv run brr list --json --pretty
+sudo env PATH="$PATH" uv run brr prog --json --pretty
 sudo env PATH="$PATH" uv run brr --csv map
 ```
 
@@ -119,7 +119,7 @@ Requires Linux, Python 3.11 or newer, and the **uv** package manager. See the
 git clone https://github.com/tanelpoder/brr.git
 cd brr
 uv sync
-sudo env PATH="$PATH" uv run brr list
+sudo env PATH="$PATH" uv run brr prog
 sudo env PATH="$PATH" uv run brr
 sudo env PATH="$PATH" uv run brr profile --kernel-samples
 ```
@@ -145,11 +145,9 @@ sudo env PATH="$PATH" uv run brr profile --help
 List loaded eBPF programs:
 
 ```bash
-sudo env PATH="$PATH" uv run brr list
-sudo env PATH="$PATH" uv run brr list -x
+sudo env PATH="$PATH" uv run brr prog
+sudo env PATH="$PATH" uv run brr prog -x
 ```
-
-`brr prog` remains available as a backward-compatible alias for `brr list`.
 
 List other object types:
 
@@ -162,7 +160,7 @@ sudo env PATH="$PATH" uv run brr btf
 Include runtime counters in the program list:
 
 ```bash
-sudo env PATH="$PATH" uv run brr list --stats
+sudo env PATH="$PATH" uv run brr prog --stats
 ```
 
 Show runtime deltas:
@@ -182,10 +180,9 @@ sudo env PATH="$PATH" uv run brr top -x
 sudo env PATH="$PATH" uv run brr top -c
 ```
 
-Bare `brr` opens the same TUI as `brr top`; root `--bpffs`, `-x`, and `-c`
-options apply to that default view. Use the explicit `top` command for options
-such as `--delay`, `--event`, and `--textmode`. Bare `--json`, `--csv`, and
-`--pretty` are rejected; use a subcommand such as `brr list --json`.
+Bare `brr` accepts the same options and opens the same TUI as `brr top`, so, for
+example, `brr -d 10` is equivalent to `brr top -d 10`. Bare `--json`, `--csv`,
+and `--pretty` are rejected; use a subcommand such as `brr prog --json`.
 
 Inside the TUI, press `x` to toggle extended columns and `c` to toggle
 cumulative columns. The live table re-enumerates loaded programs after every

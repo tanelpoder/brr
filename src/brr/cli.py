@@ -44,16 +44,23 @@ from brr.render.text import (
     render_programs,
 )
 from brr.source_context import SourceContextEnricher, SourceContextReport
-from brr.top import add_top_arguments, config_from_args, render_textmode_result, run_tui
+from brr.top import (
+    TOP_ARGUMENT_DEFAULTS,
+    add_top_arguments,
+    config_from_args,
+    render_textmode_result,
+    run_tui,
+)
 
 PROGRAM_DESCRIPTION = "eBPF Runtime Reporter and Profiler by Tanel Poder (tanelpoder.com)."
+ROOT_TOP_DEST_PREFIX = "_root_top_"
 
 
 def package_version() -> str:
     try:
         return version("brr")
     except PackageNotFoundError:
-        return "0.5.1"
+        return "0.6.0"
 
 
 def _positive_float(value: str) -> float:
@@ -123,6 +130,28 @@ def _validate_top_args(parser: argparse.ArgumentParser, args: argparse.Namespace
         return
     if not getattr(args, "textmode", False) or not getattr(args, "profile_top", False):
         parser.error("--collapse-samples requires --textmode and --profile-top")
+
+
+def _normalize_top_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    root_top_args = {
+        name.removeprefix(ROOT_TOP_DEST_PREFIX): value
+        for name, value in vars(args).items()
+        if name.startswith(ROOT_TOP_DEST_PREFIX)
+    }
+    if root_top_args and args.object_type not in {None, "top"}:
+        parser.error("top options may only be used with bare 'brr' or the 'top' command")
+    if args.object_type not in {None, "top"}:
+        return
+
+    if args.object_type is None:
+        args.object_type = "top"
+    for name, value in root_top_args.items():
+        if not hasattr(args, name):
+            setattr(args, name, value)
+        delattr(args, f"{ROOT_TOP_DEST_PREFIX}{name}")
+    for name, value in TOP_ARGUMENT_DEFAULTS.items():
+        if not hasattr(args, name):
+            setattr(args, name, value)
 
 
 def _add_output_options(parser: argparse.ArgumentParser) -> None:
@@ -262,6 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show cumulative runtime metrics where available in text output.",
     )
+    add_top_arguments(
+        parser,
+        dest_prefix=ROOT_TOP_DEST_PREFIX,
+        suppress_defaults=True,
+        include_common=False,
+    )
     parser.add_argument(
         "-V",
         "--version",
@@ -271,15 +306,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="object_type")
 
-    list_parser = subparsers.add_parser(
-        "list",
-        aliases=["prog"],
-        help="List loaded eBPF programs (alias: prog).",
+    prog_parser = subparsers.add_parser(
+        "prog",
+        help="List loaded eBPF programs.",
     )
-    list_parser.set_defaults(object_type="list")
-    _add_output_options(list_parser)
-    _add_extended_option(list_parser)
-    list_parser.add_argument(
+    _add_output_options(prog_parser)
+    _add_extended_option(prog_parser)
+    prog_parser.add_argument(
         "--stats",
         action="store_true",
         help="Enable runtime execution statistics while collecting program info.",
@@ -315,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     top_parser = subparsers.add_parser("top", help="Show the live eBPF top TUI.")
-    add_top_arguments(top_parser)
+    add_top_arguments(top_parser, suppress_defaults=True)
 
     map_parser = subparsers.add_parser("map", help="List loaded eBPF maps.")
     _add_output_options(map_parser)
@@ -446,13 +479,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.json or args.csv or args.pretty:
             parser.error(
                 "--json, --csv, and --pretty require a subcommand; "
-                "use 'brr list --json' to list programs"
+                "use 'brr prog --json' to list programs"
             )
-        default_top_args = parser.parse_args(["top"])
-        default_top_args.bpffs = args.bpffs
-        default_top_args.extended = args.extended
-        default_top_args.cumulative = args.cumulative
-        args = default_top_args
+    _normalize_top_args(parser, args)
     if args.json and args.csv:
         parser.error("--json and --csv are mutually exclusive")
     if args.pretty and args.csv:
@@ -467,7 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         object_type = args.object_type
         with_stats = getattr(args, "stats", False)
-        if object_type == "list":
+        if object_type == "prog":
             programs = service.collect_programs(with_stats=with_stats)
             if args.json:
                 print(render_programs_json(programs, pretty=args.pretty))
