@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from brr import cli
+from brr.errors import PermissionDeniedError
 from brr.models import BpfProgram
 
 
@@ -15,6 +16,14 @@ class _ProgService:
     def collect_programs(self, *, with_stats: bool = False) -> list[BpfProgram]:
         self.with_stats.append(with_stats)
         return [BpfProgram(id=7, program_type="xdp", name="pass")]
+
+
+class _DeniedTopService:
+    def collect_programs(self, *, with_stats: bool = False) -> list[BpfProgram]:
+        assert with_stats is True
+        raise PermissionDeniedError(
+            "permission denied while trying to list eBPF object IDs; run brr with sudo"
+        )
 
 
 def test_bare_brr_dispatches_to_top_with_root_options(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -38,6 +47,21 @@ def test_bare_brr_dispatches_to_top_with_root_options(monkeypatch: pytest.Monkey
     assert config.cumulative is True
     assert config.delay == 2.5
     assert config.line_limit == 0
+
+
+@pytest.mark.parametrize("args", [[], ["top"]])
+def test_top_permission_error_is_returned_before_opening_tui(
+    args: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(cli, "build_snapshot_service", lambda _bpffs: _DeniedTopService())
+
+    assert cli.main(args) == 2
+
+    assert capsys.readouterr().err == (
+        "brr: permission denied while trying to list eBPF object IDs; run brr with sudo\n"
+    )
 
 
 def test_bare_and_explicit_top_options_build_the_same_config(

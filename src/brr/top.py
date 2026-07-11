@@ -2432,6 +2432,7 @@ def _create_top_app(service: BpfSnapshotService, config: BrrConfig):
 
 
 def run_tui(service: BpfSnapshotService, config: BrrConfig) -> int:
+    service.collect_programs(with_stats=True)
     _create_top_app(service, config).run()
     return 0
 
