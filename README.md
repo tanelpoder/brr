@@ -11,6 +11,111 @@ instructions, source metadata, and BPF JIT CPU samples.
 `brr` talks to the kernel directly through `bpf()` and `perf_event_open`. It
 does not shell out to `perf`.
 
+## Install
+
+### Standalone binary (recommended)
+
+The prebuilt standalone binary is the simplest installation. It includes
+Python and the application dependencies and requires Linux with GLIBC 2.28 or
+newer. Set `BRR_ARCH` to `x86_64` or `aarch64`:
+
+```bash
+BRR_VERSION=0.6.0
+BRR_ARCH=$(uname -m)
+if [ "$BRR_ARCH" = arm64 ]; then BRR_ARCH=aarch64; fi
+
+curl -fL -o brr \
+  "https://github.com/tanelpoder/brr/releases/download/v${BRR_VERSION}/brr-${BRR_VERSION}-linux-${BRR_ARCH}"
+chmod +x brr
+sudo ./brr --help
+sudo ./brr
+```
+
+Use `wget` instead of `curl` if preferred:
+
+```bash
+BRR_VERSION=0.6.0
+BRR_ARCH=$(uname -m)
+if [ "$BRR_ARCH" = arm64 ]; then BRR_ARCH=aarch64; fi
+
+wget -O brr \
+  "https://github.com/tanelpoder/brr/releases/download/v${BRR_VERSION}/brr-${BRR_VERSION}-linux-${BRR_ARCH}"
+chmod +x brr
+sudo ./brr --help
+sudo ./brr
+```
+
+Most Linux systems report `x86_64` or `aarch64` from `uname -m`; the snippets
+also normalize `arm64` to `aarch64`. To make the downloaded binary available
+on `PATH`:
+
+```bash
+sudo install -m 0755 brr /usr/local/bin/brr
+sudo brr
+```
+
+The command examples below assume `brr` is installed on `PATH`. Use `./brr`
+instead when running the downloaded file from the current directory.
+
+### RPM and DEB packages
+
+Published packages use the same GLIBC 2.28-compatible binary. On RHEL 8 or a
+compatible RPM-based distribution:
+
+```bash
+sudo dnf install ./brr-0.6.0-1.el8.aarch64.rpm
+```
+
+On Debian 10, Ubuntu 20.04, or a newer DEB-based distribution:
+
+```bash
+sudo apt install ./brr_0.6.0-1_arm64.deb
+```
+
+Replace `aarch64`/`arm64` with `x86_64`/`amd64` for Intel and AMD 64-bit
+machines.
+
+## Build
+
+### Run from a source checkout
+
+Requires Linux, Python 3.11 or newer, and the **uv** package manager. See the
+[official uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/).
+
+```bash
+git clone https://github.com/tanelpoder/brr.git
+cd brr
+uv sync
+sudo env PATH="$PATH" uv run brr prog
+sudo env PATH="$PATH" uv run brr
+sudo env PATH="$PATH" uv run brr profile --kernel-samples
+```
+
+Run these commands from the checkout. Preserving `PATH` lets `sudo` find the
+user-installed `uv`; `uv run` then uses the checkout's managed environment.
+
+### Build release artifacts
+
+The container build produces the standalone binary, RPM, and DEB with an
+enforced GLIBC 2.28 ceiling. It requires Docker or Podman and must run natively
+on each target architecture:
+
+```bash
+scripts/build_rhel8_release.sh
+```
+
+For a simpler build that only targets the current machine's GLIBC:
+
+```bash
+uv sync --group dev --group package
+uv run --group package python scripts/build_release.py --all
+```
+
+See [PACKAGING.md](PACKAGING.md) for host dependencies, artifact names,
+compatibility checks, and the x86_64/ARM64 release procedure.
+
+## Why brr
+
 ![](docs/images/ebpf-lock-add-tsc-expanded.png)
 
 Since eBPF programs are pieces of machine code residing in (kernel) address space, you can profile them with standard `perf` just like any other kernel function. However, perf alone won't show you other useful metrics like number of executions and average eBPF program runtime, like [bpftop](https://github.com/jfernandez/bpftop) does. Also, I want an easy way to map CPU samples to original source code lines, where possible.
@@ -18,10 +123,6 @@ Since eBPF programs are pieces of machine code residing in (kernel) address spac
 I wanted to **unify** both approaches, display the bpftop-style call count & probe latency, with the ability to drill down into where _inside_ the eBPF program most of the time is spent. This tool is not calling the `perf` command under the hood, but uses `perf_event_open()` API directly. Also, it uses the `bpf()` syscall, for things like enabling eBPF program stats accounting (BPF\_ENABLE\_STATS) while `brr` is running.
 
 I built this for my own use, but this tool/idea may be useful for others too. It's entirely AI-coded by Codex in Python using my specs & tests. It's been good enough for my [performance testing](https://tanelpoder.com/posts/optimizing-ebpf-biolatency-accounting/) environments (but not so sure about production :-)
-
-1. [Jump to Installation section](#install)
-1. [Jump to command line options](#command-line-options)
-
 
 ## Usage
 
@@ -104,55 +205,9 @@ runtime metrics and the `NS_PER/s` rate.
 JSON and CSV output are available for scripting:
 
 ```bash
-sudo env PATH="$PATH" uv run brr prog --json --pretty
-sudo env PATH="$PATH" uv run brr --csv map
+sudo brr prog --json --pretty
+sudo brr --csv map
 ```
-
-## Install
-
-### Install a packaged release
-
-Published Linux artifacts are built natively for aarch64 and x86_64 with a
-GLIBC 2.28 baseline. Use the package matching the machine architecture.
-
-On RHEL 8 or a compatible RPM-based distribution:
-
-```bash
-sudo dnf install ./brr-0.6.0-1.el8.aarch64.rpm
-```
-
-On Debian 10, Ubuntu 20.04, or a newer DEB-based distribution:
-
-```bash
-sudo apt install ./brr_0.6.0-1_arm64.deb
-```
-
-The standalone artifact can be installed without a package manager:
-
-```bash
-install -m 0755 brr-0.6.0-linux-aarch64 ~/.local/bin/brr
-```
-
-Replace `aarch64`/`arm64` with `x86_64`/`amd64` for Intel and AMD 64-bit
-machines. See [PACKAGING.md](PACKAGING.md) for the containerized compatibility
-build, verification gates, and the simpler current-host build.
-
-### Run from a source checkout with uv
-
-Requires Linux, Python 3.11 or newer, and the **uv** package manager. See the
-[official uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/).
-
-```bash
-git clone https://github.com/tanelpoder/brr.git
-cd brr
-uv sync
-sudo env PATH="$PATH" uv run brr prog
-sudo env PATH="$PATH" uv run brr
-sudo env PATH="$PATH" uv run brr profile --kernel-samples
-```
-
-Run these commands from the checkout. Preserving `PATH` lets `sudo` find the
-user-installed `uv`; `uv run` then uses the checkout's managed environment.
 
 ## Command line options
 
@@ -164,47 +219,47 @@ Use `--help` for the current command list and global options, or add it after a
 subcommand for details, for example:
 
 ```bash
-sudo env PATH="$PATH" uv run brr --help
-sudo env PATH="$PATH" uv run brr top --help
-sudo env PATH="$PATH" uv run brr profile --help
+sudo brr --help
+sudo brr top --help
+sudo brr profile --help
 ```
 
 List loaded eBPF programs:
 
 ```bash
-sudo env PATH="$PATH" uv run brr prog
-sudo env PATH="$PATH" uv run brr prog -x
+sudo brr prog
+sudo brr prog -x
 ```
 
 List other object types:
 
 ```bash
-sudo env PATH="$PATH" uv run brr map
-sudo env PATH="$PATH" uv run brr link
-sudo env PATH="$PATH" uv run brr btf
+sudo brr map
+sudo brr link
+sudo brr btf
 ```
 
 Include runtime counters in the program list:
 
 ```bash
-sudo env PATH="$PATH" uv run brr prog --stats
+sudo brr prog --stats
 ```
 
 Show runtime deltas:
 
 ```bash
-sudo env PATH="$PATH" uv run brr activity --duration 2 --limit 10
-sudo env PATH="$PATH" uv run brr activity -x --duration 2
-sudo env PATH="$PATH" uv run brr activity -c --duration 2
+sudo brr activity --duration 2 --limit 10
+sudo brr activity -x --duration 2
+sudo brr activity -c --duration 2
 ```
 
 Open the interactive top-style TUI:
 
 ```bash
-sudo env PATH="$PATH" uv run brr
-sudo env PATH="$PATH" uv run brr top
-sudo env PATH="$PATH" uv run brr top -x
-sudo env PATH="$PATH" uv run brr top -c
+sudo brr
+sudo brr top
+sudo brr top -x
+sudo brr top -c
 ```
 
 Bare `brr` accepts the same options and opens the same TUI as `brr top`, so, for
@@ -228,19 +283,19 @@ returns to the drilldown. Outside a drilldown, `h` retains the main TUI help.
 Inspect a program by ID:
 
 ```bash
-sudo env PATH="$PATH" uv run brr dump 48
-sudo env PATH="$PATH" uv run brr top --program-id 48
-sudo env PATH="$PATH" uv run brr top --textmode --profile-top --program-id 48 --kernel-samples
-sudo env PATH="$PATH" uv run brr top --textmode --profile-top --program-id 48 --kernel-samples \
+sudo brr dump 48
+sudo brr top --program-id 48
+sudo brr top --textmode --profile-top --program-id 48 --kernel-samples
+sudo brr top --textmode --profile-top --program-id 48 --kernel-samples \
     --collapse-samples
 ```
 
 Profile BPF JIT CPU samples:
 
 ```bash
-sudo env PATH="$PATH" uv run brr profile --duration 5 --event auto
-sudo env PATH="$PATH" uv run brr profile --kernel-samples
-sudo env PATH="$PATH" uv run brr profile --kernel-samples --kernel-ip-detail
+sudo brr profile --duration 5 --event auto
+sudo brr profile --kernel-samples
+sudo brr profile --kernel-samples --kernel-ip-detail
 ```
 
 `brr` drains each per-CPU perf mmap ring continuously while profiling. Ring
@@ -249,8 +304,8 @@ record shape, online CPU count, and `kernel.perf_event_mlock_kb`. They can be
 overridden when tuning or diagnosing a host:
 
 ```bash
-sudo env PATH="$PATH" uv run brr profile -F 997 --perf-buffer-pages 128 --perf-drain-ms 25
-sudo env PATH="$PATH" uv run brr profile -F 997 --fail-on-loss
+sudo brr profile -F 997 --perf-buffer-pages 128 --perf-drain-ms 25
+sudo brr profile -F 997 --fail-on-loss
 ```
 
 `--perf-buffer-pages` must be `auto` or a power-of-two page count per CPU;
@@ -307,8 +362,8 @@ hardware `cycles` event when available, increase the frequency within the
 host's `kernel.perf_event_max_sample_rate`, and/or profile for longer:
 
 ```bash
-sudo env PATH="$PATH" uv run brr profile --event cycles -F 9997 --duration 30 --fail-on-loss
-sudo env PATH="$PATH" uv run brr profile --event cycles -F 4999 --duration 30 --kernel-samples --fail-on-loss
+sudo brr profile --event cycles -F 9997 --duration 30 --fail-on-loss
+sudo brr profile --event cycles -F 4999 --duration 30 --kernel-samples --fail-on-loss
 ```
 
 The normal profile counts samples whose current IP is in BPF JIT code.
@@ -323,7 +378,7 @@ the methodology and measured results.
 List perf events that `brr` can open on the current host:
 
 ```bash
-sudo env PATH="$PATH" uv run brr perf-events
+sudo brr perf-events
 ```
 
 ## Notes
