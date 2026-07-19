@@ -124,3 +124,23 @@ def test_rhel8_verifier_requires_bundled_libatomic(monkeypatch, tmp_path: Path) 
             build_release.ARCHITECTURES["x86_64"],
             archive_reader=reader,
         )
+
+
+def test_deb_control_declares_glibc_228_floor_and_runtime_libraries() -> None:
+    metadata = build_release.ProjectMetadata(version="1.2.3", description="Test package")
+
+    control = build_release.deb_control(metadata, build_release.ARCHITECTURES["aarch64"])
+
+    assert "Architecture: arm64" in control
+    assert "Depends: libc6 (>= 2.28), zlib1g, libatomic1" in control
+
+
+def test_rpm_spec_declares_rhel8_runtime_requirements() -> None:
+    metadata = build_release.ProjectMetadata(version="1.2.3", description="Test package")
+
+    spec = build_release.rpm_spec(metadata)
+
+    assert "%global __strip /bin/true" in spec
+    assert "Requires:       glibc >= 2.28" in spec
+    assert "Requires:       libatomic" in spec
+    assert "Requires:       zlib" in spec

@@ -110,6 +110,33 @@ sudo env PATH="$PATH" uv run brr --csv map
 
 ## Install
 
+### Install a packaged release
+
+Published Linux artifacts are built natively for aarch64 and x86_64 with a
+GLIBC 2.28 baseline. Use the package matching the machine architecture.
+
+On RHEL 8 or a compatible RPM-based distribution:
+
+```bash
+sudo dnf install ./brr-0.6.0-1.el8.aarch64.rpm
+```
+
+On Debian 10, Ubuntu 20.04, or a newer DEB-based distribution:
+
+```bash
+sudo apt install ./brr_0.6.0-1_arm64.deb
+```
+
+The standalone artifact can be installed without a package manager:
+
+```bash
+install -m 0755 brr-0.6.0-linux-aarch64 ~/.local/bin/brr
+```
+
+Replace `aarch64`/`arm64` with `x86_64`/`amd64` for Intel and AMD 64-bit
+machines. See [PACKAGING.md](PACKAGING.md) for the containerized compatibility
+build, verification gates, and the simpler current-host build.
+
 ### Run from a source checkout with uv
 
 Requires Linux, Python 3.11 or newer, and the **uv** package manager. See the

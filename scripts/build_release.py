@@ -351,7 +351,16 @@ def build_deb(binary: Path, metadata: ProjectMetadata, architecture: Architectur
     normalize_permissions(staging, executable_paths={staging / "usr" / "bin" / PROJECT})
 
     artifact = DIST_DIR / f"{package_name}.deb"
-    run(["dpkg-deb", "--build", "--root-owner-group", str(staging), str(artifact)])
+    run(
+        [
+            "dpkg-deb",
+            "--build",
+            "--root-owner-group",
+            "-Zxz",
+            str(staging),
+            str(artifact),
+        ]
+    )
     return artifact
 
 
@@ -413,7 +422,7 @@ def deb_control(metadata: ProjectMetadata, architecture: Architecture) -> str:
             "Section: utils",
             "Priority: optional",
             f"Architecture: {architecture.deb}",
-            "Depends: libc6, zlib1g, libatomic1",
+            "Depends: libc6 (>= 2.28), zlib1g, libatomic1",
             f"Maintainer: {MAINTAINER}",
             f"Description: {metadata.description}",
             " brr reports and profiles loaded Linux eBPF objects.",
@@ -469,13 +478,17 @@ def rpm_spec(metadata: ProjectMetadata) -> str:
         for doc_file in DOC_FILES
     )
     doc_file_lines = "\n".join(f"%doc %{{_docdir}}/%{{name}}/{doc_file}" for doc_file in DOC_FILES)
-    return f"""Name:           {PROJECT}
+    return f"""%global __strip /bin/true
+
+Name:           {PROJECT}
 Version:        {metadata.version}
 Release:        {PACKAGE_RELEASE}%{{?dist}}
 Summary:        {metadata.description}
 License:        {LICENSE}
 URL:            https://github.com/tanelpoder/brr
+Requires:       glibc >= 2.28
 Requires:       libatomic
+Requires:       zlib
 
 %description
 brr reports and profiles loaded Linux eBPF objects.

@@ -1,145 +1,189 @@
 # Packaging
 
-Release binaries are built natively in a Red Hat UBI 8.10 container. This gives
-PyInstaller a GLIBC 2.28 build environment on both supported architectures. Run
-the build independently on an x86_64 machine and an aarch64 machine; PyInstaller
-is not a cross-compiler, and the build script intentionally does not use CPU
-emulation.
+`brr` has two release workflows:
 
-The container build produces the standalone binary intended for a GitHub
-release. The existing native build command remains available for DEB and RPM
-packages, but those package builds are separate from the GLIBC 2.28 binary
-workflow.
+- The container build produces native standalone, RPM, and DEB artifacts with
+  GLIBC 2.28 compatibility. Use this for published Linux releases.
+- The native build uses the current host and is convenient for local packages.
+  Its artifacts inherit the host's GLIBC requirement and may not run on older
+  distributions.
 
-## Host Dependencies
+PyInstaller is not a cross-compiler. Run either workflow independently on an
+x86_64 host and an aarch64 host. Do not build through CPU emulation or relabel
+an artifact for a different architecture.
 
-The host only needs a container engine and a working network connection to the
-Red Hat, GitHub Container Registry, and Python package registries. Python, uv,
-PyInstaller, `readelf`, and the RHEL build libraries are installed inside the
-builder image.
+## GLIBC 2.28 Container Build
 
-On RHEL, Fedora, or a compatible distribution, Podman is the simplest option:
+The release builder uses Red Hat UBI 8.10 as the ABI baseline. UBI 8 supplies
+GLIBC 2.28 on both supported architectures, so the resulting executable runs on
+RHEL 8 and compatible distributions as well as newer Linux systems. The same
+verified executable is placed in the standalone artifact, RPM, and DEB.
+
+The builder currently contains:
+
+- UBI 8.10 and its RHEL 8 RPM tooling
+- UBI Python 3.11
+- GCC Toolset 15 and binutils 2.44
+- EPEL 8 `dpkg-deb` for Debian package assembly
+- uv 0.11.29 and the versions locked in `uv.lock`, including PyInstaller 6.21
+
+The compiler and Python headers are available if a locked dependency needs a
+source build. Binary wheels are still used when the lockfile selects them. The
+newer compiler does not change the GLIBC baseline because it runs and links in
+the UBI 8 environment.
+
+### Host dependencies
+
+The host needs a native Linux installation, network access, and either Podman
+or Docker. Python, uv, compilers, RPM tools, and DEB tools are installed inside
+the builder image. Allow access to the Red Hat, Fedora/EPEL, GitHub Container
+Registry, Python package, and Docker Hub registries.
+
+On RHEL, Fedora, or a compatible distribution:
 
 ```bash
 sudo dnf install podman
 ```
 
-On Ubuntu or Debian, install Docker from the distribution packages:
+On Ubuntu or Debian, Podman is the simplest rootless option:
+
+```bash
+sudo apt-get update
+sudo apt-get install podman
+```
+
+Docker from the distribution repository also works:
 
 ```bash
 sudo apt-get update
 sudo apt-get install docker.io
+sudo systemctl enable --now docker
+sudo usermod -aG docker "$USER"
 ```
 
-Ensure the current user can run Docker, or run the build through a rootless
-Podman installation. The script detects Docker or Podman automatically. To
-select one explicitly:
+Log out and back in after adding the Docker group. Run the build as the normal
+checkout owner so bind-mounted artifacts are not written as root.
+
+The script detects a working engine, preferring Podman. Select one explicitly
+when both are installed:
 
 ```bash
-CONTAINER_ENGINE=podman scripts/build_rhel8_binary.sh
-CONTAINER_ENGINE=docker scripts/build_rhel8_binary.sh
+CONTAINER_ENGINE=podman scripts/build_rhel8_release.sh
+CONTAINER_ENGINE=docker scripts/build_rhel8_release.sh
 ```
 
-The UBI builder installs these packages automatically:
+### Build all release artifacts
 
-- `python3.11`: the system CPython embedded by PyInstaller
-- `binutils`: provides `readelf` for GLIBC symbol-version inspection
-- `file`: provides manual ELF diagnostics
-- `libatomic`: bundled for ordered perf ring access, especially on aarch64
-
-A compiler toolchain, Python development headers, RPM tools, and DEB tools are
-not required for the standalone binary build.
-
-## Build RHEL 8 Compatible Binaries
-
-Start from a clean checkout on each native machine and run:
+Start from a clean checkout on the native build machine:
 
 ```bash
-scripts/build_rhel8_binary.sh
+scripts/build_rhel8_release.sh
 ```
 
-The script:
+The command performs these mandatory gates:
 
-1. Builds `Containerfile.rhel8` for the machine's native architecture.
-2. Uses UBI's `/usr/bin/python3.11`; uv-managed Python downloads are disabled.
-3. Syncs the locked development and packaging dependencies.
-4. Runs Ruff, the format check, and the complete unit test suite.
-5. Builds the one-file PyInstaller binary and verifies all bundled ELF files.
-6. Runs the finished binary in a fresh UBI 8 minimal runtime container.
+1. Confirms the container and host architectures match and GLIBC is 2.28.
+2. Reports the Python, compiler, binutils, RPM, DEB, and uv versions.
+3. Syncs the lockfile and runs Ruff, the format check, and all unit tests.
+4. Builds the PyInstaller executable, RPM, and DEB from one payload.
+5. Inspects every bundled ELF for architecture and GLIBC symbol versions.
+6. Confirms the package payloads are byte-identical to the standalone binary.
+7. Installs and smoke-tests the RPM on UBI 8.10 and the DEB on Debian 10 and
+   Ubuntu 20.04.
+8. Verifies the checksum manifest.
 
-The compatibility check fails the build if any outer or bundled ELF requires a
-GLIBC symbol newer than 2.28, has the wrong architecture, or if
-`libatomic.so.1` is not bundled. It also retains the `ldd`, `--help`, and
-`--version` smoke checks. There is no release-build option to skip these gates.
+The ELF check rejects GLIBC symbol requirements newer than 2.28, a mismatched
+architecture, or a bundle without `libatomic.so.1`. The runtime checks exercise
+`--version` and `--help`; live eBPF operations still require an appropriate
+kernel and privileges.
 
 Artifacts are written to `dist/release/`:
 
-- x86_64: `brr-<version>-linux-x86_64`
-- aarch64: `brr-<version>-linux-aarch64`
-- checksum manifest: `SHA256SUMS`
+- `brr-<version>-linux-x86_64` or `brr-<version>-linux-aarch64`
+- `brr-<version>-1.el8.x86_64.rpm` or `brr-<version>-1.el8.aarch64.rpm`
+- `brr_<version>-1_amd64.deb` or `brr_<version>-1_arm64.deb`
+- `SHA256SUMS`
 
-The builder and runtime image names can be overridden for local mirrors:
+Image names can be overridden for local mirrors:
 
 ```bash
 BRR_BUILDER_IMAGE=example/brr-builder:8 \
-BRR_RUNTIME_IMAGE=example/ubi8-minimal:8 \
-scripts/build_rhel8_binary.sh
+BRR_RHEL_RUNTIME_IMAGE=example/ubi8-minimal:8.10 \
+BRR_DEBIAN_RUNTIME_IMAGE=example/debian:buster \
+BRR_UBUNTU_RUNTIME_IMAGE=example/ubuntu:20.04 \
+scripts/build_rhel8_release.sh
 ```
 
-## Verify and Publish Artifacts
+The old `scripts/build_rhel8_binary.sh` entrypoint remains as a wrapper and now
+builds the complete release.
 
-The build log reports the number of inspected ELF files and the highest GLIBC
-symbol version found. It must report at most `GLIBC_2.28`.
+### Repeat on x86_64 Ubuntu 24.04
 
-Additional manual checks can be run on the host:
+Use a native x86_64 checkout and run the same commands:
+
+```bash
+sudo apt-get update
+sudo apt-get install podman
+git clone https://github.com/tanelpoder/brr.git
+cd brr
+scripts/build_rhel8_release.sh
+```
+
+The script derives RPM, DEB, and artifact architecture names from `uname -m`.
+No `--platform`, QEMU, or other cross-build option is needed or supported.
+
+## Verify Artifacts Manually
+
+The release script already runs these checks. They can also be repeated on the
+host when the relevant tools are installed:
 
 ```bash
 file dist/release/brr-*-linux-*
-dist/release/brr-*-linux-* --version
+rpm -qip dist/release/*.rpm
+dpkg-deb --info dist/release/*.deb
 
 cd dist/release
 sha256sum -c SHA256SUMS
 ```
 
-Upload the x86_64 artifact produced on the x86_64 machine and the aarch64
-artifact produced on the aarch64 machine to the same GitHub release. Do not
-rename an x86_64 payload as aarch64, or the reverse.
+The standalone bundle supplies Python, application dependencies, and
+`libatomic.so.1`. GLIBC remains a system library. GLIBC compatibility does not
+guarantee that every operation works on an old kernel; the corresponding eBPF
+commands, perf facilities, kernel configuration, and privileges must also be
+available.
 
-The standalone bundle supplies Python, application packages, and libatomic.
-Standard RHEL 8 runtime libraries are still used, including GLIBC. GLIBC 2.28
-compatibility does not imply that every brr operation works on every old
-kernel: the relevant eBPF commands, perf facilities, privileges, and kernel
-configuration must still be available.
+## Simple Native Build
 
-## Native DEB and RPM Packages
-
-The original package builder remains available when native DEB or RPM packages
-are needed. Install uv and the packaging tools on that build host:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Use this path when packages only need to run on the current machine or on hosts
+with an equal or newer GLIBC. Install uv plus the native package tools.
 
 On RHEL-family systems:
 
 ```bash
-sudo dnf install rpm-build rpm cpio dpkg
+# Enable the matching EPEL repository first when dpkg is not already available.
+# For RHEL 8 and compatible distributions:
+sudo dnf install \
+  https://dl.fedoraproject.org/pub/epel/epel-release-latest-8.noarch.rpm
+sudo dnf install rpm-build rpm cpio dpkg binutils
 ```
 
 On Debian-family systems:
 
 ```bash
 sudo apt-get update
-sudo apt-get install rpm dpkg cpio
+sudo apt-get install rpm dpkg cpio binutils
 ```
 
-Then build the native packages:
+Build and test from the checkout:
 
 ```bash
 uv sync --group dev --group package
+uv run ruff check .
+uv run ruff format --check .
+uv run python -m pytest -q
 uv run --group package python scripts/build_release.py --all
 ```
 
-These package commands use the host toolchain and system Python. Use the
-containerized binary workflow above for the GitHub release binaries with the
-enforced GLIBC 2.28 ceiling.
+The same `dist/release/` names are used, but this command does not assert a
+GLIBC 2.28 ceiling. Add `--binary`, `--rpm`, or `--deb` to build only selected
+artifact types.

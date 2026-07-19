@@ -43,6 +43,8 @@ mocking collectors, perf openers, sample data, and sleeper functions.
 - `src/brr/dump_compare.py`: compares brr's decoded dump and source metadata
   with `bpftool`; mismatches intentionally produce exit status 1.
 - `scripts/build_release.py`: native PyInstaller, DEB, RPM, and checksum build.
+- `scripts/build_rhel8_release.sh` and `Containerfile.rhel8`: native-architecture
+  GLIBC 2.28 release build and package/runtime verification.
 - `README.md`: user-facing install/usage overview. `EXAMPLE_OUTPUT.md` shows
   richer profiler reports, and `PACKAGING.md` is the release procedure.
 
@@ -140,8 +142,16 @@ change. Update `EXAMPLE_OUTPUT.md` when the richer activity/profile presentation
 changes, and update `PACKAGING.md` for release-process changes.
 
 Release builds are native to the build host. Never relabel an x86_64
-PyInstaller payload as aarch64, or the reverse. Build on each target
-architecture with:
+PyInstaller payload as aarch64, or the reverse. Build the published standalone,
+RPM, and DEB artifacts on each target architecture with:
+
+```bash
+scripts/build_rhel8_release.sh
+```
+
+This container path enforces the GLIBC 2.28 ceiling and install-tests the
+packages on old runtime images. For a simpler build that only targets the
+current host's GLIBC, use:
 
 ```bash
 uv sync --group dev --group package
