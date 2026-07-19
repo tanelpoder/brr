@@ -1,6 +1,6 @@
 # Packaging
 
-`brr` has two release workflows:
+`brr` has two build paths:
 
 - The container build produces native standalone, RPM, and DEB artifacts with
   GLIBC 2.28 compatibility. Use this for published Linux releases.
@@ -11,6 +11,63 @@
 PyInstaller is not a cross-compiler. Run either workflow independently on an
 x86_64 host and an aarch64 host. Do not build through CPU emulation or relabel
 an artifact for a different architecture.
+
+Official releases are assembled by GitHub Actions from native x86_64 and
+aarch64 builds. The same container command remains available locally for
+pre-release testing and as a manual fallback.
+
+## Automated GitHub Releases
+
+The `Release` workflow runs on version tags matching `vMAJOR.MINOR.PATCH`. It
+uses native `ubuntu-24.04` and `ubuntu-24.04-arm` runners and executes
+`scripts/build_rhel8_release.sh` independently on each architecture. The
+workflow does not use emulation or cross-compilation. GitHub's hosted ARM64
+runner is currently a public preview; the local aarch64 build remains the
+fallback if that runner is temporarily unavailable.
+
+Each build still passes all container checks documented below. The final job
+requires the exact six standalone and package artifacts, writes one combined
+`SHA256SUMS`, creates build-provenance attestations, uploads the seven files to
+the matching GitHub release, and downloads them again to verify the published
+bytes. The release remains a draft for manual review.
+
+Prepare a release only after the version bump and local checks are committed:
+
+```bash
+git tag -a v0.6.0 -m "brr 0.6.0"
+git push origin main
+git push origin v0.6.0
+```
+
+Pushing a new version tag starts the workflow. To populate an existing draft
+or retry an existing tag, dispatch it explicitly from the default branch:
+
+```bash
+gh workflow run release.yml --ref main -f tag=v0.6.0
+gh run list --workflow release.yml --limit 5
+run_id=$(gh run list --workflow release.yml --limit 1 --json databaseId \
+  --jq '.[0].databaseId')
+gh run watch "$run_id" --exit-status
+```
+
+Before publishing, download the draft assets and verify the combined manifest:
+
+```bash
+verify_dir=$(mktemp -d)
+gh release download v0.6.0 --dir "$verify_dir"
+(cd "$verify_dir" && sha256sum -c SHA256SUMS)
+gh release view v0.6.0
+```
+
+Publish only after the draft notes and all seven assets have been reviewed:
+
+```bash
+gh release edit v0.6.0 --verify-tag --draft=false --latest
+```
+
+The workflow refuses to replace assets on a published release. A retry may
+replace the complete asset set while the release is still a draft. With GitHub
+release immutability enabled, publishing also locks the release assets and tag.
 
 ## GLIBC 2.28 Container Build
 

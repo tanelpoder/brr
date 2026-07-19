@@ -111,8 +111,11 @@ uv sync --group dev --group package
 uv run --group package python scripts/build_release.py --all
 ```
 
-See [PACKAGING.md](PACKAGING.md) for host dependencies, artifact names,
-compatibility checks, and the x86_64/ARM64 release procedure.
+Official version tags run the same container build on native x86_64 and ARM64
+GitHub-hosted runners, combine both architectures into one checksum manifest,
+and prepare a draft release for manual approval. See
+[PACKAGING.md](PACKAGING.md) for host dependencies, artifact names,
+compatibility checks, and the automated and local release procedures.
 
 ## Why brr
 

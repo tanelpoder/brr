@@ -1,0 +1,224 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing annotated release tag, for example v0.6.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.release.outputs.commit }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Check out workflow revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag and version
+        id: release
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag=$DISPATCH_TAG
+          else
+            tag=$GITHUB_REF_NAME
+          fi
+          if [[ ! $tag =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "release tag must match vMAJOR.MINOR.PATCH: $tag" >&2
+            exit 1
+          fi
+          git fetch --force origin "refs/tags/$tag:refs/tags/$tag"
+          if [[ $(git cat-file -t "$tag") != tag ]]; then
+            echo "release tag must be annotated: $tag" >&2
+            exit 1
+          fi
+          commit=$(git rev-parse "$tag^{commit}")
+          version=$(
+            git show "$tag:pyproject.toml" |
+              python3 -c 'import sys, tomllib; print(tomllib.load(sys.stdin.buffer)["project"]["version"])'
+          )
+          if [[ "v$version" != "$tag" ]]; then
+            echo "tag $tag does not match project version $version" >&2
+            exit 1
+          fi
+          {
+            echo "commit=$commit"
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.architecture }}
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64
+            runner: ubuntu-24.04
+          - architecture: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+          fetch-depth: 1
+
+      - name: Verify source and runner architecture
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+          EXPECTED_COMMIT: ${{ needs.resolve.outputs.commit }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          case $(uname -m) in
+            x86_64 | amd64) runner_architecture=x86_64 ;;
+            aarch64 | arm64) runner_architecture=aarch64 ;;
+            *) echo "unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          test "$runner_architecture" = "$EXPECTED_ARCHITECTURE"
+
+      - name: Build and test GLIBC 2.28 release
+        env:
+          CONTAINER_ENGINE: docker
+        run: scripts/build_rhel8_release.sh
+
+      - name: Stage architecture artifacts
+        env:
+          ARCHITECTURE: ${{ matrix.architecture }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          stage="dist/ci-$ARCHITECTURE"
+          mkdir -p "$stage"
+          case $ARCHITECTURE in
+            x86_64)
+              deb_arch=amd64
+              rpm_arch=x86_64
+              ;;
+            aarch64)
+              deb_arch=arm64
+              rpm_arch=aarch64
+              ;;
+          esac
+          install -m 0755 "dist/release/brr-$VERSION-linux-$ARCHITECTURE" "$stage/"
+          install -m 0644 "dist/release/brr-$VERSION-1.el8.$rpm_arch.rpm" "$stage/"
+          install -m 0644 "dist/release/brr_$VERSION-1_$deb_arch.deb" "$stage/"
+          test "$(find "$stage" -maxdepth 1 -type f | wc -l)" -eq 3
+
+      - name: Upload architecture artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.architecture }}
+          path: dist/ci-${{ matrix.architecture }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Assemble draft release
+    needs:
+      - resolve
+      - build
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Check out workflow revision
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+
+      - name: Download architecture artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist/upload
+          merge-multiple: true
+
+      - name: Validate artifact set and write checksums
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: python3 scripts/assemble_release.py --version "$VERSION" dist/upload
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/upload/*
+
+      - name: Create or validate draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.resolve.outputs.commit }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          if release=$(gh release view "$RELEASE_TAG" --json isDraft 2>/dev/null); then
+            if [[ $(jq -r .isDraft <<< "$release") != true ]]; then
+              echo "refusing to modify published release $RELEASE_TAG" >&2
+              exit 1
+            fi
+          else
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --generate-notes \
+              --target "$RELEASE_COMMIT" \
+              --title "brr $VERSION" \
+              --verify-tag
+          fi
+
+      - name: Replace draft assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t existing_assets < <(
+            gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'
+          )
+          for asset in "${existing_assets[@]}"; do
+            gh release delete-asset "$RELEASE_TAG" "$asset" --yes
+          done
+          mapfile -t upload_assets < <(find dist/upload -maxdepth 1 -type f -print | sort)
+          test "${#upload_assets[@]}" -eq 7
+          gh release upload "$RELEASE_TAG" "${upload_assets[@]}"
+
+      - name: Verify uploaded release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          verify_dir=$(mktemp -d)
+          gh release download "$RELEASE_TAG" --dir "$verify_dir"
+          diff \
+            <(find dist/upload -maxdepth 1 -type f -printf '%f\n' | sort) \
+            <(find "$verify_dir" -maxdepth 1 -type f -printf '%f\n' | sort)
+          cmp dist/upload/SHA256SUMS "$verify_dir/SHA256SUMS"
+          (cd "$verify_dir" && sha256sum -c SHA256SUMS)
+          gh release view "$RELEASE_TAG" --json assets,isDraft,url
