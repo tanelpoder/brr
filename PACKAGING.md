@@ -34,16 +34,16 @@ bytes. The release remains a draft for manual review.
 Prepare a release only after the version bump and local checks are committed:
 
 ```bash
-git tag -a v0.6.0 -m "brr 0.6.0"
+git tag -a v0.6.1 -m "brr 0.6.1"
 git push origin main
-git push origin v0.6.0
+git push origin v0.6.1
 ```
 
 Pushing a new version tag starts the workflow. To populate an existing draft
 or retry an existing tag, dispatch it explicitly from the default branch:
 
 ```bash
-gh workflow run release.yml --ref main -f tag=v0.6.0
+gh workflow run release.yml --ref main -f tag=v0.6.1
 gh run list --workflow release.yml --limit 5
 run_id=$(gh run list --workflow release.yml --limit 1 --json databaseId \
   --jq '.[0].databaseId')
@@ -54,15 +54,15 @@ Before publishing, download the draft assets and verify the combined manifest:
 
 ```bash
 verify_dir=$(mktemp -d)
-gh release download v0.6.0 --dir "$verify_dir"
+gh release download v0.6.1 --dir "$verify_dir"
 (cd "$verify_dir" && sha256sum -c SHA256SUMS)
-gh release view v0.6.0
+gh release view v0.6.1
 ```
 
 Publish only after the draft notes and all seven assets have been reviewed:
 
 ```bash
-gh release edit v0.6.0 --verify-tag --draft=false --latest
+gh release edit v0.6.1 --verify-tag --draft=false --latest
 ```
 
 The workflow refuses to replace assets on a published release. A retry may

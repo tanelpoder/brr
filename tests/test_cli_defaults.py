@@ -242,7 +242,7 @@ def test_root_help_and_version_remain_available(capsys) -> None:
     with pytest.raises(SystemExit, match="0"):
         cli.main(["--version"])
     version_output = capsys.readouterr().out
-    assert version_output.startswith("brr 0.6.0")
+    assert version_output.startswith("brr 0.6.1")
     assert "eBPF Runtime Reporter and Profiler" in version_output
 
 

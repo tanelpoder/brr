@@ -1,393 +1,167 @@
-# eBPF Runtime Reporter and Profiler - brr
+# brr — eBPF Runtime Reporter and Profiler
 
-`brr` is the eBPF Runtime Reporter: a compact CLI and Textual TUI for listing,
-inspecting, and profiling loaded Linux eBPF objects.
+`brr` is a Linux CLI and interactive TUI that feels like `ps` and `top` for
+eBPF. It lists loaded eBPF objects, measures program activity, maps CPU samples
+back to BPF source lines, and shows kernel work triggered underneath BPF
+programs.
 
-It is meant to feel like `ps` and `top` for eBPF. The default command opens the
-live top-style TUI; `brr prog` prints one loaded eBPF program per row, and other
-subcommands show maps, links, BTF objects, runtime deltas, translated
-instructions, source metadata, and BPF JIT CPU samples.
+`brr` talks directly to the kernel through `bpf()` and `perf_event_open()`. It
+does not depend on the `perf` command.
 
-`brr` talks to the kernel directly through `bpf()` and `perf_event_open`. It
-does not shell out to `perf`.
+[![Live eBPF program list in brr](docs/images/brr-list.webp)](docs/images/brr-list.webp)
 
-## Install
+*Live program activity, execution rate, average runtime, and JIT size.*
 
-### Standalone binary (recommended)
+[![Source-level eBPF profile in brr](docs/images/brr-1.webp)](docs/images/brr-1.webp)
 
-The prebuilt standalone binary is the simplest installation. It includes
-Python and the application dependencies and requires Linux with GLIBC 2.28 or
-newer. Set `BRR_ARCH` to `x86_64` or `aarch64`:
+*Source-level CPU attribution, including time spent in kernel functions called
+from the selected BPF program.*
+
+[More screenshots](#more-screenshots)
+
+## Install / build
+
+Most commands require root or equivalent Linux capabilities. Published
+standalone binaries include Python and the application dependencies and require
+Linux with GLIBC 2.28 or newer.
+
+### Standalone binary
+
+ARM64 (`aarch64`):
 
 ```bash
-BRR_VERSION=0.6.0
-BRR_ARCH=$(uname -m)
-if [ "$BRR_ARCH" = arm64 ]; then BRR_ARCH=aarch64; fi
-
-curl -fL -o brr \
-  "https://github.com/tanelpoder/brr/releases/download/v${BRR_VERSION}/brr-${BRR_VERSION}-linux-${BRR_ARCH}"
-chmod +x brr
-sudo ./brr --help
-sudo ./brr
+curl -fL -o brr https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr-0.6.1-linux-aarch64 && chmod +x brr
 ```
 
-Use `wget` instead of `curl` if preferred:
+x86-64 (`x86_64`):
 
 ```bash
-BRR_VERSION=0.6.0
-BRR_ARCH=$(uname -m)
-if [ "$BRR_ARCH" = arm64 ]; then BRR_ARCH=aarch64; fi
-
-wget -O brr \
-  "https://github.com/tanelpoder/brr/releases/download/v${BRR_VERSION}/brr-${BRR_VERSION}-linux-${BRR_ARCH}"
-chmod +x brr
-sudo ./brr --help
-sudo ./brr
+curl -fL -o brr https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr-0.6.1-linux-x86_64 && chmod +x brr
 ```
 
-Most Linux systems report `x86_64` or `aarch64` from `uname -m`; the snippets
-also normalize `arm64` to `aarch64`. To make the downloaded binary available
-on `PATH`:
+Run it from the current directory or install it on `PATH`:
 
 ```bash
+sudo ./brr
 sudo install -m 0755 brr /usr/local/bin/brr
 sudo brr
 ```
 
-The command examples below assume `brr` is installed on `PATH`. Use `./brr`
-instead when running the downloaded file from the current directory.
-
 ### RPM and DEB packages
 
-Published packages use the same GLIBC 2.28-compatible binary. On RHEL 8 or a
-compatible RPM-based distribution:
+| Platform | RPM | DEB |
+| --- | --- | --- |
+| ARM64 | [`brr-0.6.1-1.el8.aarch64.rpm`](https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr-0.6.1-1.el8.aarch64.rpm) | [`brr_0.6.1-1_arm64.deb`](https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr_0.6.1-1_arm64.deb) |
+| x86-64 | [`brr-0.6.1-1.el8.x86_64.rpm`](https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr-0.6.1-1.el8.x86_64.rpm) | [`brr_0.6.1-1_amd64.deb`](https://github.com/tanelpoder/brr/releases/download/v0.6.1/brr_0.6.1-1_amd64.deb) |
+
+The release also includes a combined
+[`SHA256SUMS`](https://github.com/tanelpoder/brr/releases/download/v0.6.1/SHA256SUMS)
+manifest for all six binaries and packages.
+
+Install a downloaded package with `dnf` or `apt`:
 
 ```bash
-sudo dnf install ./brr-0.6.0-1.el8.aarch64.rpm
+sudo dnf install ./brr-0.6.1-1.el8.aarch64.rpm
+sudo apt install ./brr_0.6.1-1_arm64.deb
 ```
 
-On Debian 10, Ubuntu 20.04, or a newer DEB-based distribution:
+Use the matching x86-64 package name on Intel and AMD 64-bit systems.
 
-```bash
-sudo apt install ./brr_0.6.0-1_arm64.deb
-```
+### Run from source
 
-Replace `aarch64`/`arm64` with `x86_64`/`amd64` for Intel and AMD 64-bit
-machines.
-
-## Build
-
-### Run from a source checkout
-
-Requires Linux, Python 3.11 or newer, and the **uv** package manager. See the
-[official uv installation instructions](https://docs.astral.sh/uv/getting-started/installation/).
+Source checkouts require Linux, Python 3.11 or newer, and
+[`uv`](https://docs.astral.sh/uv/getting-started/installation/).
 
 ```bash
 git clone https://github.com/tanelpoder/brr.git
 cd brr
 uv sync
-sudo env PATH="$PATH" uv run brr prog
 sudo env PATH="$PATH" uv run brr
-sudo env PATH="$PATH" uv run brr profile --kernel-samples
 ```
-
-Run these commands from the checkout. Preserving `PATH` lets `sudo` find the
-user-installed `uv`; `uv run` then uses the checkout's managed environment.
 
 ### Build release artifacts
 
-The container build produces the standalone binary, RPM, and DEB with an
-enforced GLIBC 2.28 ceiling. It requires Docker or Podman and must run natively
-on each target architecture:
+Build the GLIBC 2.28-compatible standalone binary, RPM, and DEB natively for the
+current architecture with Docker or Podman:
 
 ```bash
 scripts/build_rhel8_release.sh
 ```
 
-For a simpler build that only targets the current machine's GLIBC:
+For a simpler build that targets the current host's GLIBC:
 
 ```bash
 uv sync --group dev --group package
 uv run --group package python scripts/build_release.py --all
 ```
 
-Official version tags run the same container build on native x86_64 and ARM64
-GitHub-hosted runners, combine both architectures into one checksum manifest,
-and prepare a draft release for manual approval. See
-[PACKAGING.md](PACKAGING.md) for host dependencies, artifact names,
-compatibility checks, and the automated and local release procedures.
+See [PACKAGING.md](PACKAGING.md) for release dependencies, compatibility
+checks, artifact verification, and the native multi-architecture GitHub
+release workflow.
 
-## Why brr
+## Quick start
 
-![](docs/images/ebpf-lock-add-tsc-expanded.png)
-
-Since eBPF programs are pieces of machine code residing in (kernel) address space, you can profile them with standard `perf` just like any other kernel function. However, perf alone won't show you other useful metrics like number of executions and average eBPF program runtime, like [bpftop](https://github.com/jfernandez/bpftop) does. Also, I want an easy way to map CPU samples to original source code lines, where possible.
-
-I wanted to **unify** both approaches, display the bpftop-style call count & probe latency, with the ability to drill down into where _inside_ the eBPF program most of the time is spent. This tool is not calling the `perf` command under the hood, but uses `perf_event_open()` API directly. Also, it uses the `bpf()` syscall, for things like enabling eBPF program stats accounting (BPF\_ENABLE\_STATS) while `brr` is running.
-
-I built this for my own use, but this tool/idea may be useful for others too. It's entirely AI-coded by Codex in Python using my specs & tests. It's been good enough for my [performance testing](https://tanelpoder.com/posts/optimizing-ebpf-biolatency-accounting/) environments (but not so sure about production :-)
-
-## Usage
-
-`brr` runs in two modes, **`brr top`** is an interactive TUI and other options like **`brr activity`**, **`brr profile`** produce profiles in plain text output (including JSON, CSV). See [EXAMPLE\_OUTPUT.md](EXAMPLE_OUTPUT.md) for text mode profiling examples.
-
-Here are some screenshots from running `brr top` on a machine with some sysbench & fio stress-test workloads, while multiple different eBPF monitoring/observability programs were enabled.
-
-The landing page shows the bpftop-style program execution summary. You can press "h" to display the help menu.
-
-![](docs/images/brr-top-entrypoint-trimmed.png)
-
-I had configured my `xcapture` tool to monitor all system calls of all threads in an efficient way (tracking + sampling, not tracing), we are apparently doing 2M syscalls/s on this machine and the `xcap_sys_enter` probe used 25% of _one CPU_ time in aggregate.
-
-Now you can use arrow keys to navigate to the program of interest and press enter to see its source code snippets (coming from each program's BTF info if available).
-
-I picked the `get_tasks` program as it's a longer and more complex program. It's an eBPF task iterator doing _passive sampling_ of all system threads' states, without injecting any tracepoints or probes into their critical path.
-
-![](docs/images/ebpf-task-local-storage.png)
-
-The screenshot above predates the current column names: `WEIGHT` is now
-`SAMPLES`, the number of perf samples attributed to that row. `%THIS` shows the
-row's percentage of the selected program's inclusive samples.
-
-You also see that some code lines have a little "+" sign in front of them. These are the CPU samples where we happened to be in some Linux _kernel_ function (not our eBPF program) - but that kernel function call was done by our eBPF program. You can press "e" to expand (and "c" to collapse) just like in perf to see the deeper stack under that eBPF program line.
-
-So basically, I'm doing something like `perf record -g --call-graph ...` here, whenever I see a CPU sample in kernel function, I walk up the call-graph and see if the parent (or grandparent) function is our eBPF program of interest. eBPF programs can call (or fall) into Linux built-in kernel functions, as there are eBPF helper functions and other system activity like interrupts, page faults, spinlock gets, etc.
-
-Here's an example with a `lock_xadd()` function call immediately catching (my) eyes:
-
-![](docs/images/ebpf-lock-add-tsc-collapsed.png)
-
-But when I expand the profile with "e", I see it's actually another function call `bpf_ktime_get_ns()` passed into the `lock_xadd(...)` as an argument that calls `read_tsc()` that takes most of the time under the original function call:
-
-![](docs/images/ebpf-lock-add-tsc-expanded.png)
-
-Here are two examples from the `syscount` command (part of bcc-tools) when running lots of syscalls concurrently:
-
-![](docs/images/ebpf-hashtable-collapsed.png)
-
-When expanded, we see that most of the samples fall under `__pi_memcpy` Linux kernel function:
-
-![](docs/images/ebpf-hashtable-expanded.png)
-
-When updating shared eBPF hash-maps under high concurrency (lots of events & lots of CPUs), then you might start seeing various "lock" functions showing up:
-
-![](docs/images/ebpf-hashtable-lock-bucket.png)
-
-With modern eBPF _sleepable_ programs (that allow reading other processes memory), you might even start seeing kernel spin lock functions and page fault handlers showing up in your profiles:
-
-![](docs/images/ebpf-spinlock.png)
-
-Press `e` on a folded `...` row to expand source lines even when they have no
-profile hits. This view is reconstructed from the program's binary metadata,
-not read from the original source tree, so compiler and JIT transformations can
-make the displayed source-line order look unusual.
-
-## Output
-
-Program listing (`brr prog`):
-
-```text
-ID  TYPE       NAME          XLATED_BYTES  JITED_BYTES
-42  tracing    trace_execve  744           512
-48  xdp        xdp_pass      96            64
-53  cgroup_skb allow_egress  312           224
-```
-
-Runtime activity:
-
-```text
-ID  TYPE     NAME          XLATED_BYTES  JITED_BYTES  RUN_CNT_DELTA  RUN_TIME_NS_DELTA  AVG_RUN_TIME_NS
-48  xdp      xdp_pass      96            64           1842           714110             387
-42  tracing  trace_execve  744           512          18             28422              1579
-```
-
-Use `-x` or `--extended` to include extra columns such as `TAG` and `PINNED`.
-Use `-c` or `--cumulative` with `activity` and `top` to include cumulative
-runtime metrics and the `NS_PER/s` rate.
-
-JSON and CSV output are available for scripting:
+Open the interactive TUI:
 
 ```bash
-sudo brr prog --json --pretty
-sudo brr --csv map
+sudo brr
 ```
 
-## Command line options
-
-Most useful commands need root or equivalent Linux capabilities because they
-open BPF objects and CPU-wide perf events.
-
-
-Use `--help` for the current command list and global options, or add it after a
-subcommand for details, for example:
-
-```bash
-sudo brr --help
-sudo brr top --help
-sudo brr profile --help
-```
-
-List loaded eBPF programs:
+List loaded programs and other BPF objects:
 
 ```bash
 sudo brr prog
-sudo brr prog -x
-```
-
-List other object types:
-
-```bash
 sudo brr map
 sudo brr link
 sudo brr btf
 ```
 
-Include runtime counters in the program list:
+Measure activity or profile BPF JIT execution:
 
 ```bash
-sudo brr prog --stats
-```
-
-Show runtime deltas:
-
-```bash
-sudo brr activity --duration 2 --limit 10
-sudo brr activity -x --duration 2
-sudo brr activity -c --duration 2
-```
-
-Open the interactive top-style TUI:
-
-```bash
-sudo brr
-sudo brr top
-sudo brr top -x
-sudo brr top -c
-```
-
-Bare `brr` accepts the same options and opens the same TUI as `brr top`, so, for
-example, `brr -d 10` is equivalent to `brr top -d 10`. Bare `--json`, `--csv`,
-and `--pretty` are rejected; use a subcommand such as `brr prog --json`.
-
-Inside the TUI, press `x` to toggle extended columns and `c` to toggle
-cumulative columns. The live table re-enumerates loaded programs after every
-completed sampling window, so newly loaded programs appear without restarting
-`brr`. Refresh is intentionally paused while a program inspect/profile view is
-open; press `Esc` to return to the live table.
-
-In a drilldown, `e`/`c` expand and collapse source folds or helper children
-without moving the selected branch within the viewport. Kernel/helper samples
-are grouped by function and BPF caller line by default; `i` toggles exact IP and
-`+0x...` offset rows without resampling. Source mapping markers moved to `m`,
-with their legend on `M`. Press `h` for drilldown-specific help; this local help
-lists only keys that apply to the inspect/profile window, and `h` or `Esc`
-returns to the drilldown. Outside a drilldown, `h` retains the main TUI help.
-
-Inspect a program by ID:
-
-```bash
-sudo brr dump 48
-sudo brr top --program-id 48
-sudo brr top --textmode --profile-top --program-id 48 --kernel-samples
-sudo brr top --textmode --profile-top --program-id 48 --kernel-samples \
-    --collapse-samples
-```
-
-Profile BPF JIT CPU samples:
-
-```bash
-sudo brr profile --duration 5 --event auto
+sudo brr activity --duration 2
+sudo brr profile --duration 5
 sudo brr profile --kernel-samples
-sudo brr profile --kernel-samples --kernel-ip-detail
 ```
 
-`brr` drains each per-CPU perf mmap ring continuously while profiling. Ring
-capacity and the maximum sweep interval are selected from the sample frequency,
-record shape, online CPU count, and `kernel.perf_event_mlock_kb`. They can be
-overridden when tuning or diagnosing a host:
+Use `brr --help` or `brr <command> --help` for all options. Plain text, JSON,
+and CSV output are available for scripting; the interactive TUI is also
+available as deterministic text output with `brr top --textmode`.
 
-```bash
-sudo brr profile -F 997 --perf-buffer-pages 128 --perf-drain-ms 25
-sudo brr profile -F 997 --fail-on-loss
-```
+## What brr shows
 
-`--perf-buffer-pages` must be `auto` or a power-of-two page count per CPU;
-`--perf-drain-ms` accepts `auto` or a positive number of milliseconds. Profile
-output reports ring sizing, drain count, peak occupancy, perf enabled/running
-time, kernel loss/throttle records, parser discards, and warnings. With
-`--fail-on-loss`, an incomplete CLI or `top --textmode` profile is still printed
-but the command exits with status 1. JSON and CSV include the same capture
-telemetry for automation.
+- Loaded BPF programs, maps, links, BTF objects, JIT sizes, and pinned paths.
+- Program execution counts, average runtime, CPU usage, and cumulative metrics.
+- Translated BPF instructions annotated with source metadata when available.
+- Perf samples attributed to BPF source lines and to helper or kernel functions
+  running underneath them.
+- Capture-loss and perf-buffer telemetry for judging profile completeness.
 
-Profiled inspect drilldowns show `%THIS` followed by `SAMPLES`; `%THIS` is the
-row's contribution to this selected program's inclusive sampled total. Source,
-instruction, and helper/kernel percentages are non-overlapping and add to
-exactly 100.00%. `--line-limit` limits detailed direct and kernel/helper hotspot
-rows independently, while `--source-limit` optionally limits detailed textmode
-inspect rows. Neither limit discards attribution: omitted detail is retained in
-explicit `Other eBPF` or `Other under-eBPF` aggregate rows. Use `--line-limit 0`
-to display every hotspot. `brr profile` and profiled textmode default
-to 10 detailed hotspots per direct/under bucket. The interactive TUI defaults
-to unlimited hotspots so its drilldown does not hide any samples; an explicit
-`brr top --line-limit N` still overrides that default.
+`bpftool` is optional and used only for explicit enrichment or comparison.
+`brr` scopes runtime statistics with `BPF_ENABLE_STATS` and does not write to
+`/proc/sys/kernel/bpf_stats_enabled`.
 
-Human-readable kernel/helper output groups sampled offsets into complete
-function totals at each BPF caller line before applying `--line-limit`; a row
-adds `(N IPs)` when multiple sampled instructions contributed. Add
-`--kernel-ip-detail` to `brr profile` or `brr top` for exact IP rows initially.
-In the TUI, `i` switches between the two views at any time. JSON and CSV remain
-exact-IP output regardless of this presentation option.
+For richer text reports, see [EXAMPLE_OUTPUT.md](EXAMPLE_OUTPUT.md). For the
+sampling methodology and measured comparisons with `perf`, see
+[Correctness validation against perf](docs/perf-correctness-validation.md).
 
-The compact drilldown header reports the program's total sampled CPU split into
-eBPF code, activity under eBPF in helpers or other kernel functions, and any
-genuine inclusive-attribution mismatch. Missing source metadata and row limits
-do not change the direct/under CPU split. Here, 100% means one fully busy CPU,
-so totals may exceed 100% on multicore systems. Normal capture telemetry is
-omitted from this header; loss, multiplexing, and other capture problems still
-appear as warnings.
+## More screenshots
 
-`brr profile` adds the same `Other` aggregates below limited hotspot
-tables. Profile JSON and CSV expose per-program direct and caller source-mapping
-counts, direct and under-eBPF samples omitted from detailed hotspot lists,
-translated instruction offsets, and `unaccounted_samples`. Mapping and row
-retention are orthogonal diagnostics and may overlap; they should not be added
-together.
+Expand a source line to see which kernel functions account for work underneath
+the BPF program:
 
-`top --textmode` expands helper/kernel children by default. Add
-`--collapse-samples` to fold those children into their calling eBPF rows while
-retaining the same 100.00% total. The option requires both `--textmode` and
-`--profile-top`. Bare `top --textmode` remains an activity-only snapshot and
-does not start perf sampling.
+[![Kernel costs under a BPF map operation](docs/images/brr-2.webp)](docs/images/brr-2.webp)
 
-Very short BPF programs may receive only a handful of samples at 997 Hz,
-especially with `cpu-clock`. For stable program and source-line rankings, use a
-hardware `cycles` event when available, increase the frequency within the
-host's `kernel.perf_event_max_sample_rate`, and/or profile for longer:
+The same drilldown makes hash-map lookup and comparison costs visible:
 
-```bash
-sudo brr profile --event cycles -F 9997 --duration 30 --fail-on-loss
-sudo brr profile --event cycles -F 4999 --duration 30 --kernel-samples --fail-on-loss
-```
+[![Kernel hash-map lookup costs](docs/images/brr-3.webp)](docs/images/brr-3.webp)
 
-The normal profile counts samples whose current IP is in BPF JIT code.
-`--kernel-samples` also captures callchains and attributes time in kernel
-helpers back to the BPF source line that called them. When comparing with
-`perf`, match brr's kernel-only event scope (`cycles:k` or `cpu-clock:k`) and
-compare simultaneous captures or repeated averages; adjacent sampling windows
-can differ even under steady I/O. See
-[Correctness validation against perf](docs/perf-correctness-validation.md) for
-the methodology and measured results.
+Sleepable programs can expose user-memory access, page walking, and locking
+costs:
 
-List perf events that `brr` can open on the current host:
+[![Kernel work under copy-from-user-task](docs/images/brr-4.webp)](docs/images/brr-4.webp)
 
-```bash
-sudo brr perf-events
-```
+Queue-map pushes can reveal copying and lock contention below the calling BPF
+source line:
 
-## Notes
-
-- Default bpffs path: `/sys/fs/bpf`
-- Optional `bpftool`: enriches mixed inspect output when available
-- `perf` command-line tool: not used by `brr`
-- Runtime stats are enabled temporarily with `BPF_ENABLE_STATS`; `brr` does not
-  write to `/proc/sys/kernel/bpf_stats_enabled`
+[![Queue-map and locking hotspot](docs/images/brr-5.webp)](docs/images/brr-5.webp)
