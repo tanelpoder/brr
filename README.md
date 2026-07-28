@@ -8,14 +8,18 @@ programs.
 `brr` talks directly to the kernel through `bpf()` and `perf_event_open()`. It
 does not depend on the `perf` command.
 
+*Live program activity, execution rate, average runtime, and JIT size:*
+
 [![Live eBPF program list in brr](docs/images/brr-list.webp)](docs/images/brr-list.webp)
 
-*Live program activity, execution rate, average runtime, and JIT size.*
+*Source-level CPU attribution, including time spent in kernel functions called from the selected BPF program:*
 
 [![Source-level eBPF profile in brr](docs/images/brr-1.webp)](docs/images/brr-1.webp)
 
-*Source-level CPU attribution, including time spent in kernel functions called
-from the selected BPF program.*
+*Expand a source line to see which kernel functions account for work underneath the BPF program:*
+
+[![Kernel costs under a BPF map operation](docs/images/brr-2.webp)](docs/images/brr-2.webp)
+
 
 [More screenshots](#more-screenshots)
 
@@ -147,12 +151,7 @@ sampling methodology and measured comparisons with `perf`, see
 
 ## More screenshots
 
-Expand a source line to see which kernel functions account for work underneath
-the BPF program:
-
-[![Kernel costs under a BPF map operation](docs/images/brr-2.webp)](docs/images/brr-2.webp)
-
-The same drilldown makes hash-map lookup and comparison costs visible:
+Profiling drilldown makes hash-map lookup and comparison costs visible:
 
 [![Kernel hash-map lookup costs](docs/images/brr-3.webp)](docs/images/brr-3.webp)
 
