@@ -1,12 +1,11 @@
 # brr — eBPF Runtime Reporter and Profiler
 
-`brr` is a Linux CLI and interactive TUI that feels like `ps` and `top` for
-eBPF. It lists loaded eBPF objects, measures program activity, maps CPU samples
-back to BPF source lines, and shows kernel work triggered underneath BPF
-programs.
+`brr` is a tool that gives you _bpftop_-like initial listing of eBPF program activity, with the ability to thenk press ENTER for seeing the source code lines of a program and press "p" to profile the eBPF program using `perf_events` sampling.
 
-`brr` talks directly to the kernel through `bpf()` and `perf_event_open()`. It
-does not depend on the `perf` command.
+It has both a plain-text, JSON, CSV CLI output mode and a top-like TUI mode. It lists loaded eBPF objects, measures program activity, maps CPU samples
+back to BPF source lines, and importantly also shows any kernel work triggered underneath eBPF programs.
+
+`brr` talks directly to the kernel through `bpf()` and `perf_event_open()`. It does not depend on the `perf` command.
 
 *Live program activity, execution rate, average runtime, and JIT size:*
 
